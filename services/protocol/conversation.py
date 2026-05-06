@@ -15,7 +15,7 @@ def _build_tool_prompt(tools: list[dict[str, Any]]) -> str:
     if not tools:
         return ""
     lines: list[str] = [
-        "You can invoke the following developer tools. Call a tool only when it is required and follow the JSON schema exactly when providing arguments."
+        "You have access to the following tools. Use them proactively — do NOT ask the user clarifying questions when a tool call can answer the request directly."
     ]
     for tool in tools:
         f = tool.get("function", {})
@@ -28,14 +28,17 @@ def _build_tool_prompt(tools: list[dict[str, Any]]) -> str:
             lines.append(schema_text)
         else:
             lines.append("Arguments JSON schema: {}")
-            
-    lines.append("When you decide to call a tool you MUST respond with nothing except a single fenced block exactly like the template below.")
-    lines.append("The fenced block MUST use ```xml as the opening fence and ``` as the closing fence. Do not add text before or after it.")
+
+    lines.append("\nCRITICAL RULES:")
+    lines.append("1. When the user's intent can be resolved by a tool, call the tool IMMEDIATELY without asking for confirmation or additional information.")
+    lines.append("2. When you decide to call a tool you MUST respond with nothing except a single fenced block exactly like the template below.")
+    lines.append("3. The fenced block MUST use ```xml as the opening fence and ``` as the closing fence. Do not add text before or after it.")
     lines.append("```xml")
     lines.append('<tool_call name="tool_name">{"argument": "value"}</tool_call>')
     lines.append("```")
-    lines.append("Use double quotes for JSON keys and values. If you omit the fenced block or include any extra text, the system will assume you are NOT calling a tool and your request will fail.")
-    lines.append("If multiple tool calls are required, include multiple <tool_call> entries inside the same fenced block. Without a tool call, reply normally and do NOT emit any ```xml fence.")
+    lines.append("4. Use double quotes for JSON keys and values. If you omit the fenced block or include any extra text, the system will assume you are NOT calling a tool.")
+    lines.append("5. If multiple tool calls are required, include multiple <tool_call> entries inside the same fenced block.")
+    lines.append("6. Without a tool call, reply normally and do NOT emit any ```xml fence.")
     return "\n".join(lines)
 
 def extract_and_remove_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
@@ -243,6 +246,17 @@ def normalize_messages(messages: object, system: Any = None, tools: list[dict[st
                 if "name" in message:
                     msg["name"] = message["name"]
                 normalized.append(msg)
+
+    # Inject XML tool-call hint into last user message (Gemini-FastAPI XML_WRAP_HINT behaviour)
+    if tools:
+        XML_TOOL_HINT = "\n\n[If a tool call is needed to answer this, output ONLY the ```xml block. Do not ask questions.]"
+        for i in range(len(normalized) - 1, -1, -1):
+            if normalized[i].get("role") == "user":
+                existing = normalized[i].get("content") or ""
+                if isinstance(existing, str) and XML_TOOL_HINT not in existing:
+                    normalized[i] = dict(normalized[i])
+                    normalized[i]["content"] = existing + XML_TOOL_HINT
+                break
     return normalized
 
 
