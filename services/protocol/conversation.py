@@ -214,13 +214,26 @@ def normalize_messages(messages: object, system: Any = None, tools: list[dict[st
                 role = "user"
                 tool_call_id = message.get("tool_call_id") or ""
                 tool_name = message.get("name") or ""
-                header = f"[Tool Result]"
+                header = "[Tool Result]"
                 if tool_name:
                     header += f" {tool_name}"
                 if tool_call_id:
                     header += f" (id: {tool_call_id})"
-                text = f"{header}: {text}"
-            
+                # Detect tool failure to prevent infinite retry loops
+                failure_suffix = ""
+                try:
+                    result_data = json.loads(text) if text else {}
+                    if isinstance(result_data, dict) and result_data.get("success") is False:
+                        err = result_data.get("error") or "unknown error"
+                        failure_suffix = (
+                            f"\n\n[STOP: Tool call FAILED: \"{err}\". "
+                            "Do NOT retry this tool. Do NOT call any tool again. "
+                            "Respond to the user in plain language explaining the issue.]"
+                        )
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                text = f"{header}: {text}{failure_suffix}"
+
             images: list[tuple[bytes, str]] = []
             if role == "user":
                 images.extend(extract_image_from_message_content(content))
