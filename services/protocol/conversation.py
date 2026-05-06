@@ -12,11 +12,19 @@ TOOL_CALL_RE = re.compile(r'<tool_call\s+name=["\'](.*?)["\']>(.*?)</tool_call>'
 JSON_TOOL_CALL_RE = re.compile(r'\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"args"\s*:\s*(\{.*?\})\s*\}', re.DOTALL)
 
 
+# Exact XML_WRAP_HINT from Gemini-FastAPI
+_XML_WRAP_HINT = (
+    "\nYou MUST wrap every tool call response inside a single fenced block exactly like:\n"
+    '```xml\n<tool_call name="tool_name">{"arg": "value"}</tool_call>\n```\n'
+    "Do not surround the fence with any other text or whitespace; otherwise the call will be ignored.\n"
+)
+
+
 def _build_tool_prompt(tools: list[dict[str, Any]]) -> str:
     if not tools:
         return ""
     lines: list[str] = [
-        "You have access to the following tools. Use them proactively — do NOT ask the user clarifying questions when a tool call can answer the request directly."
+        "You can invoke the following developer tools. Call a tool only when it is required and follow the JSON schema exactly when providing arguments."
     ]
     for tool in tools:
         f = tool.get("function", {})
@@ -25,26 +33,31 @@ def _build_tool_prompt(tools: list[dict[str, Any]]) -> str:
         lines.append(f"Tool `{name}`: {desc}")
         params = f.get("parameters") or {}
         required = params.get("required") or []
-        if params:
+        if required:
+            # Only show schema when there are required params; otherwise model will try to use optional ones
             schema_text = json.dumps(params, ensure_ascii=False, indent=2)
             lines.append("Arguments JSON schema:")
             lines.append(schema_text)
-            if not required:
-                lines.append(f"  >> `{name}` has NO required parameters. Call it with empty {{}}.  Do NOT invent or guess values.")
         else:
-            lines.append(f"  >> `{name}` takes no parameters. Call it with: {{}}")
+            # No required params → call with {} to prevent hallucinated optional param values
+            lines.append("Arguments JSON schema: {}")
+            lines.append(f"  >> `{name}` requires NO arguments. You MUST call it with exactly: {{}}")
 
-    lines.append("\nCRITICAL RULES:")
-    lines.append("1. When the user's intent can be resolved by a tool, call the tool IMMEDIATELY without asking for confirmation.")
-    lines.append("2. NEVER invent, guess, or hallucinate parameter values. Only use values you are 100% certain of from the conversation.")
-    lines.append("3. If a tool has no required parameters, ALWAYS call it with empty arguments: {}")
-    lines.append("4. When you call a tool, respond with ONLY a single fenced block:")
+    lines.append(
+        "When you decide to call a tool you MUST respond with nothing except a single fenced block exactly like the template below."
+    )
+    lines.append(
+        "The fenced block MUST use ```xml as the opening fence and ``` as the closing fence. Do not add text before or after it."
+    )
     lines.append("```xml")
-    lines.append('<tool_call name="tool_name">{}</tool_call>')
+    lines.append('<tool_call name="tool_name">{"argument": "value"}</tool_call>')
     lines.append("```")
-    lines.append("5. Do NOT add text before or after the xml block.")
-    lines.append("6. If multiple tool calls are needed, include multiple <tool_call> tags in the same block.")
-    lines.append("7. Without a tool call, reply normally without any ```xml fence.")
+    lines.append(
+        "Use double quotes for JSON keys and values. If you omit the fenced block or include any extra text, the system will assume you are NOT calling a tool and your request will fail."
+    )
+    lines.append(
+        "If multiple tool calls are required, include multiple <tool_call> entries inside the same fenced block. Without a tool call, reply normally and do NOT emit any ```xml fence."
+    )
     return "\n".join(lines)
 
 def extract_and_remove_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
@@ -266,23 +279,15 @@ def normalize_messages(messages: object, system: Any = None, tools: list[dict[st
                     msg["name"] = message["name"]
                 normalized.append(msg)
 
-    # Inject XML tool-call hint into last user message (Gemini-FastAPI XML_WRAP_HINT behaviour)
-    # This prevents the model from hallucinating answers from static context.
+    # Inject XML tool-call hint into last user message (mirrors Gemini-FastAPI _append_xml_hint_to_last_user_message)
     if tools:
-        XML_TOOL_HINT = (
-            "\n\n[SYSTEM INSTRUCTION: The static context only lists device names - "
-            "it does NOT contain any current states, sensor readings, or live values. "
-            "If this question requires live home data, current status, or any real-time value, "
-            "you MUST call the appropriate tool immediately. "
-            "Output ONLY the ```xml tool call block - no text before or after. "
-            "Do NOT guess. Do NOT answer from static context. Do NOT ask follow-up questions before calling the tool.]"
-        )
+        hint_stripped = _XML_WRAP_HINT.strip()
         for i in range(len(normalized) - 1, -1, -1):
             if normalized[i].get("role") == "user":
                 existing = normalized[i].get("content") or ""
-                if isinstance(existing, str) and "SYSTEM INSTRUCTION:" not in existing:
+                if isinstance(existing, str) and hint_stripped not in existing:
                     normalized[i] = dict(normalized[i])
-                    normalized[i]["content"] = existing + XML_TOOL_HINT
+                    normalized[i]["content"] = existing + _XML_WRAP_HINT
                 break
     return normalized
 
