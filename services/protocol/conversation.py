@@ -12,8 +12,8 @@ TOOL_CALL_RE = re.compile(r'<tool_call\s+name=["\'](.+?)["\']>(.*?)</tool_call>'
 TOOL_CALL_DIRECT_RE = re.compile(r'<([A-Z][A-Za-z0-9_]*?)>(.*?)</\1>', re.DOTALL)
 JSON_TOOL_CALL_RE = re.compile(r'\{\s*"path"\s*:\s*"([^"]+)"\s*,\s*"args"\s*:\s*(\{.*?\})\s*\}', re.DOTALL)
 CONTROL_TOKEN_RE = re.compile(r'<\|im_(?:start|end)\|>')
-# Strip ChatGPT internal citation markers, e.g. citeturn0search7, citeturn0news3
-CITATION_RE = re.compile(r'\s*citeturn\d+\w+\d*', re.IGNORECASE)
+# Strip ChatGPT internal citation markers, e.g. citeturn0search7, 【4†citeturn0search8】
+CITATION_RE = re.compile(r'【?[0-9†]*\s*citeturn[^\s】]*\s*】?', re.IGNORECASE)
 
 
 # Exact XML_WRAP_HINT from Gemini-FastAPI
