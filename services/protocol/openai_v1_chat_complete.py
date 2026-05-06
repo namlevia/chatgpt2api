@@ -102,7 +102,7 @@ def _buffered_tool_chat_completion(backend, request: ConversationRequest) -> Ite
     # Collect the entire response
     content, tool_calls = collect_chat_content_and_tools(stream_conversation_events(backend, request))
     
-    with open("d:\\Chatgpt\\chatgpt2api\\debug.log", "a", encoding="utf-8") as f:
+    with open("./debug.log", "a", encoding="utf-8") as f:
         f.write(f"\n--- BUFFERED START ---\nRAW CONTENT: {repr(content)}\n")
 
     # If we have text, we parse it to extract and remove any injected tool calls
@@ -114,7 +114,7 @@ def _buffered_tool_chat_completion(backend, request: ConversationRequest) -> Ite
         if extracted_tool_calls:
             tool_calls.extend(extracted_tool_calls)
             
-    with open("d:\\Chatgpt\\chatgpt2api\\debug.log", "a", encoding="utf-8") as f:
+    with open("./debug.log", "a", encoding="utf-8") as f:
         f.write(f"CLEANED CONTENT: {repr(content)}\n--- BUFFERED END ---\n")
 
         
@@ -150,7 +150,7 @@ def stream_text_chat_completion(backend, request: ConversationRequest) -> Iterat
     
     def _filtered_events():
         buffer = ""
-        with open("d:\\Chatgpt\\chatgpt2api\\debug.log", "a", encoding="utf-8") as f:
+        with open("./debug.log", "a", encoding="utf-8") as f:
             f.write(f"\n--- FILTERED START ---\n")
         for event in stream_conversation_events(backend, request):
             if event.get("type") == "conversation.delta":
@@ -169,7 +169,7 @@ def stream_text_chat_completion(backend, request: ConversationRequest) -> Iterat
             buffer = CITATION_RE.sub("", buffer)
             buffer = re.sub(r'[^\s]*citeturn[^\s]*', '', buffer, flags=re.IGNORECASE)
             yield {"type": "conversation.delta", "delta": buffer}
-        with open("d:\\Chatgpt\\chatgpt2api\\debug.log", "a", encoding="utf-8") as f:
+        with open("./debug.log", "a", encoding="utf-8") as f:
             f.write(f"--- FILTERED END ---\n")
 
             
