@@ -7,6 +7,12 @@ import re
 import time
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
+
+# Maximum approximate serialized payload size in bytes before we truncate history.
+# ChatGPT's backend returns 413 (Request Entity Too Large) when the payload exceeds
+# its limit. We keep messages under this threshold to avoid that error.
+_MAX_PAYLOAD_BYTES = 180_000  # ~180 KB, well under typical 256 KB limit
 
 TOOL_CALL_RE = re.compile(r'<tool_call\s+name=["\'](.+?)["\']>(.*?)</tool_call>', re.DOTALL)
 TOOL_CALL_DIRECT_RE = re.compile(r'<([A-Z][A-Za-z0-9_]*?)>(.*?)</\1>', re.DOTALL)
@@ -259,6 +265,69 @@ def message_text(content: Any) -> str:
     return ""
 
 
+def _estimate_payload_size(messages: list[dict[str, Any]]) -> int:
+    """Quick approximate serialized size of the messages list in bytes.
+
+    Uses len(str()) as a fast proxy for json.dumps size.  This is not
+    perfectly accurate but is good enough to catch oversized payloads
+    before they reach the ChatGPT backend.
+    """
+    return len(str(messages))
+
+
+def _truncate_messages(
+    messages: list[dict[str, Any]],
+    max_bytes: int = _MAX_PAYLOAD_BYTES,
+) -> list[dict[str, Any]]:
+    """Drop the oldest non-system messages when the payload exceeds *max_bytes*.
+
+    Strategy:
+      1. Always keep system messages (first entries).
+      2. Measure the total estimated size.
+      3. If over the limit, drop oldest user/assistant/tool messages
+         one by one until the size fits.
+      4. If *still* over after dropping everything except the last
+         user message, truncate the content of that last message.
+    """
+    if not messages:
+        return messages
+
+    # Find system boundary: everything before the first non-system message
+    system_count = 0
+    for msg in messages:
+        if msg.get("role") == "system":
+            system_count += 1
+        else:
+            break
+
+    # Fast path: already small enough
+    if _estimate_payload_size(messages) <= max_bytes:
+        return messages
+
+    # Keep system messages + as many recent non-system messages as fit
+    system_part = messages[:system_count]
+    history = messages[system_count:]
+
+    # Drop oldest history messages until we fit
+    while len(history) > 1 and _estimate_payload_size(system_part + history) > max_bytes:
+        history.pop(0)
+
+    # If still too large, truncate the content of the last user message
+    if _estimate_payload_size(system_part + history) > max_bytes and history:
+        last_user_idx = -1
+        for i in range(len(history) - 1, -1, -1):
+            if history[i].get("role") == "user":
+                last_user_idx = i
+                break
+        if last_user_idx >= 0:
+            content = history[last_user_idx].get("content", "")
+            if isinstance(content, str) and len(content) > 500:
+                history[last_user_idx] = dict(history[last_user_idx])
+                history[last_user_idx]["content"] = content[:500] + "\n\n[Content truncated due to size...]"
+
+    return system_part + history
+
+
 def normalize_messages(messages: object, system: Any = None, tools: list[dict[str, Any]] | None = None, tool_choice: Any = None) -> list[dict[str, Any]]:
     normalized = []
 
@@ -349,6 +418,10 @@ def normalize_messages(messages: object, system: Any = None, tools: list[dict[st
                     normalized[i] = dict(normalized[i])
                     normalized[i]["content"] = existing + _XML_WRAP_HINT
                 break
+
+    # --- Truncation safeguard against 413 (Request Entity Too Large) ---
+    normalized = _truncate_messages(normalized)
+
     return normalized
 
 
