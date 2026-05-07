@@ -34,6 +34,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq-dev \
     gcc \
     openssl \
+    jq \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip install --no-cache-dir uv
@@ -50,6 +51,9 @@ COPY utils ./utils
 COPY scripts ./scripts
 COPY --from=web-build /app/web/out ./web_dist
 
+COPY run.sh ./
+RUN chmod +x ./run.sh
+
 EXPOSE 80
 
-CMD ["uv", "run", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "80", "--access-log"]
+CMD ["/app/run.sh"]
