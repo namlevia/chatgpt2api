@@ -1,0 +1,138 @@
+name: Sync Upstream & Create PR
+
+on:
+  # Tự động chạy mỗi thứ Hai lúc 7h sáng (giờ Việt Nam = UTC+7, tức 00:00 UTC)
+  schedule:
+    - cron: "0 0 * * 1"
+  # Cho phép chạy thủ công khi cần
+  workflow_dispatch:
+
+jobs:
+  sync-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/basketikun/chatgpt2api.git
+          git fetch upstream
+
+      - name: Check for new commits from upstream
+        id: check
+        run: |
+          UPSTREAM_COMMITS=$(git log HEAD..upstream/main --oneline | wc -l)
+          echo "upstream_commits=$UPSTREAM_COMMITS" >> $GITHUB_OUTPUT
+          if [ "$UPSTREAM_COMMITS" -gt "0" ]; then
+            echo "has_updates=true" >> $GITHUB_OUTPUT
+            echo "✅ Có $UPSTREAM_COMMITS commit mới từ upstream."
+          else
+            echo "has_updates=false" >> $GITHUB_OUTPUT
+            echo "ℹ️ Không có cập nhật mới từ upstream."
+          fi
+
+      - name: Create sync branch and merge upstream
+        if: steps.check.outputs.has_updates == 'true'
+        id: merge
+        run: |
+          BRANCH_NAME="sync/upstream-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH_NAME"
+
+          # Thử merge tự động
+          if git merge upstream/main --no-edit -m "chore: sync upstream $(date +%Y-%m-%d)"; then
+            echo "merge_success=true" >> $GITHUB_OUTPUT
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+            echo "✅ Merge thành công, không có conflict."
+          else
+            # Có conflict - vẫn tạo PR để bạn giải quyết thủ công
+            git add -A
+            git commit -m "chore: sync upstream $(date +%Y-%m-%d) [có conflict, cần giải quyết thủ công]" --allow-empty
+            echo "merge_success=false" >> $GITHUB_OUTPUT
+            echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+            echo "⚠️ Có conflict, cần giải quyết thủ công."
+          fi
+
+      - name: Push sync branch
+        if: steps.check.outputs.has_updates == 'true'
+        run: |
+          git push origin "${{ steps.merge.outputs.branch_name }}"
+
+      - name: Create Pull Request (Merge thành công)
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.merge_success == 'true'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.merge.outputs.branch_name }}
+          base: main
+          title: "⬆️ Sync upstream: cập nhật từ basketikun/chatgpt2api ($(date +%Y-%m-%d))"
+          body: |
+            ## Cập Nhật Tự Động Từ Upstream
+
+            Workflow này đã tự động lấy các commit mới nhất từ [basketikun/chatgpt2api](https://github.com/basketikun/chatgpt2api) về.
+
+            **Trạng thái:** ✅ Merge tự động thành công, không có xung đột.
+
+            ### Việc cần làm:
+            1. Xem qua các thay đổi trong tab "Files changed".
+            2. Kiểm tra xem có thay đổi nào ảnh hưởng đến các tính năng tùy chỉnh của bạn không (conversation.py, account_service.py).
+            3. Nếu ổn, bấm **Merge pull request**.
+            4. Sau khi merge, workflow "Publish Lite Docker Image" sẽ tự động build lại image mới.
+
+            ---
+            *Được tạo tự động bởi GitHub Actions*
+          labels: "upstream-sync,automated"
+
+      - name: Create Pull Request (Có conflict)
+        if: steps.check.outputs.has_updates == 'true' && steps.merge.outputs.merge_success == 'false'
+        uses: peter-evans/create-pull-request@v6
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.merge.outputs.branch_name }}
+          base: main
+          title: "⚠️ Sync upstream: CÓ CONFLICT cần giải quyết thủ công ($(date +%Y-%m-%d))"
+          body: |
+            ## Cập Nhật Tự Động Từ Upstream
+
+            **Trạng thái:** ⚠️ Có xung đột (conflict) khi merge. Cần giải quyết thủ công.
+
+            ### Cách giải quyết conflict:
+            ```bash
+            # 1. Checkout nhánh sync về máy tính của bạn
+            git fetch origin
+            git checkout ${{ steps.merge.outputs.branch_name }}
+
+            # 2. Xem các file có conflict
+            git status
+
+            # 3. Mở từng file có conflict, tìm các dòng <<<<<<< và sửa
+            # 4. Sau khi sửa xong, commit và push
+            git add .
+            git commit -m "fix: resolve merge conflicts"
+            git push origin ${{ steps.merge.outputs.branch_name }}
+            ```
+
+            ### Các file hay bị conflict nhất:
+            - `services/protocol/conversation.py` (tool-call, aspect ratio, tiếng Việt)
+            - `services/account_service.py` (initialize_from_env)
+            - `api/app.py` (gọi initialize_from_env)
+
+            ---
+            *Được tạo tự động bởi GitHub Actions*
+          labels: "upstream-sync,automated,needs-review"
+
+      - name: No updates summary
+        if: steps.check.outputs.has_updates == 'false'
+        run: echo "Không có cập nhật mới từ upstream. Không cần tạo PR."
