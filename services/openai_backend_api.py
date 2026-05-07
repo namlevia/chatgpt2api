@@ -1,5 +1,4 @@
 import base64
-import json
 import os
 import re
 import time
@@ -19,10 +18,6 @@ from utils.helper import ensure_ok, iter_sse_payloads, new_uuid
 from utils.log import logger
 from utils.pow import build_legacy_requirements_token, build_proof_token, parse_pow_resources
 from utils.turnstile import solve_turnstile_token
-
-# Maximum payload size in bytes before we refuse to send (safety net).
-# ChatGPT's backend returns 413 above ~256 KB.  We stay well below.
-_MAX_PAYLOAD_BYTES = 200_000
 
 
 class InvalidAccessTokenError(RuntimeError):
@@ -806,10 +801,6 @@ class OpenAIBackendAPI:
             images.append(response.content)
         return images
 
-    def _estimate_payload_size(self, payload: dict) -> int:
-        """Quick approximate serialized size of the payload dict in bytes."""
-        return len(str(payload))
-
     def stream_conversation(
             self,
             messages: Optional[list[Dict[str, Any]]] = None,
@@ -830,18 +821,6 @@ class OpenAIBackendAPI:
         requirements = self._get_chat_requirements()
         path, timezone = self._chat_target()
         payload = self._conversation_payload(normalized, model, timezone, tools=tools, tool_choice=tool_choice)
-
-        # Safety check: log a warning if the payload is approaching the 413 limit
-        payload_size = self._estimate_payload_size(payload)
-        if payload_size > _MAX_PAYLOAD_BYTES:
-            logger.warning({
-                "event": "payload_too_large",
-                "path": path,
-                "estimated_bytes": payload_size,
-                "max_bytes": _MAX_PAYLOAD_BYTES,
-                "message_count": len(payload.get("messages", [])),
-            })
-
         response = self.session.post(
             self.base_url + path,
             headers=self._conversation_headers(path, requirements),
