@@ -1,10 +1,9 @@
 from __future__ import annotations
 
-import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime
 from threading import Condition, Lock
 from typing import Any
+from datetime import datetime
 
 from services.config import config
 from services.log_service import (
@@ -340,15 +339,17 @@ class AccountService:
         }
 
     def initialize_from_env(self) -> None:
-        """Tự động nạp tài khoản từ biến môi trường CHATGPT_TOKEN_1, CHATGPT_TOKEN_2..."""
+        """从环境变量 CHATGPT_TOKEN_1, CHATGPT_TOKEN_2... 中自动导入账号"""
+        import os
         tokens = []
+        # 扫描 CHATGPT_TOKEN_1 到 CHATGPT_TOKEN_100 ( hoặc more if needed )
         for i in range(1, 101):
             token = os.getenv(f"CHATGPT_TOKEN_{i}")
             if token and token.strip():
                 tokens.append(token.strip())
-
+        
         if tokens:
-            print(f"[account-service] Tìm thấy {len(tokens)} tài khoản từ biến môi trường, đang nạp vào hệ thống...")
+            print(f"[account-service] Found {len(tokens)} accounts from environment variables. Initializing...")
             self.add_accounts(tokens)
 
 
