@@ -157,6 +157,7 @@ class AccountService:
                         normalized["user_id"] = str(payload["sub"])
         normalized["email"] = normalized.get("email") or None
         normalized["user_id"] = normalized.get("user_id") or None
+        normalized["source_type"] = str(normalized.get("source_type") or "web").strip() or "web"
         limits_progress = normalized.get("limits_progress")
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
         normalized["default_model_slug"] = normalized.get("default_model_slug") or None
