@@ -46,6 +46,54 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_VIEWPORT = {"width": 1366, "height": 768}
+_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/130.0.0.0 Safari/537.36"
+)
+
+# Injected into every page before any other script runs — masks automation
+# signals that Cloudflare / Google bot detection checks.
+_STEALTH_INIT_SCRIPT = """
+// 1. navigator.webdriver — dead giveaway
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+// 2. chrome.runtime — real Chrome always has this
+window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {} };
+
+// 3. plugins — headless Chrome reports empty array
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const arr = [1, 2, 3, 4, 5];
+        arr.item = i => undefined;
+        arr.namedItem = n => undefined;
+        arr.refresh = () => {};
+        return arr;
+    }
+});
+
+// 4. languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['vi-VN', 'vi', 'en-US', 'en']
+});
+
+// 5. permissions — headless Chrome often denies notifications
+const _origQuery = navigator.permissions.query.bind(navigator.permissions);
+navigator.permissions.query = (params) => (
+    params.name === 'notifications'
+        ? Promise.resolve({ state: 'prompt', onchange: null })
+        : _origQuery(params)
+);
+
+// 6. hardwareConcurrency — real machines have >1 cores
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+
+// 7. deviceMemory
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+// 8. platform — hide Linux from VPS
+Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+"""
 # Chrome single-instance lock files that linger after a crash and block
 # the next launch with "Profile is already in use".
 _CHROME_LOCK_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
@@ -217,6 +265,7 @@ class BrowserPool:
                 viewport=_DEFAULT_VIEWPORT,
                 locale="vi-VN",
                 timezone="Asia/Ho_Chi_Minh",
+                user_agent=_USER_AGENT,
                 # backend='patchright' suppresses CDP signals → better Turnstile score
                 backend='patchright',
                 humanize=True,  # human-like mouse/keyboard behavior → passes 24/24 behavioral signals
@@ -226,8 +275,10 @@ class BrowserPool:
                     "--disable-session-crashed-bubble",
                     "--disable-infobars",
                     "--no-default-browser-check",
+                    "--disable-blink-features=AutomationControlled",
                 ],
             )
+            await context.add_init_script(_STEALTH_INIT_SCRIPT)
         else:
             # Fallback to patchright (Google Chrome channel)
             assert self._playwright is not None
@@ -239,15 +290,19 @@ class BrowserPool:
                 viewport=_DEFAULT_VIEWPORT,
                 locale="vi-VN",
                 timezone_id="Asia/Ho_Chi_Minh",
+                user_agent=_USER_AGENT,
                 env=env,
                 args=[
                     "--no-first-run",
                     "--disable-session-crashed-bubble",
                     "--disable-infobars",
                     "--no-default-browser-check",
+                    "--disable-blink-features=AutomationControlled",
+                    "--disable-dev-shm-usage",
                 ],
                 ignore_default_args=["--enable-automation"],
             )
+            await context.add_init_script(_STEALTH_INIT_SCRIPT)
         
         self._attach_close_handler(profile, context)
         pages = context.pages
