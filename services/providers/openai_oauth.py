@@ -419,6 +419,21 @@ class CodexOAuthProvider:
                                 ).isoformat()
                         except Exception:
                             restore_iso = None
+                        # Fallback: extract resets_at from JSON body (codex free plan
+                        # returns it in the body, not as a header).
+                        if not restore_iso:
+                            try:
+                                body_json = json.loads(error_text)
+                                err_obj = body_json.get("error") if isinstance(body_json, dict) else None
+                                if isinstance(err_obj, dict):
+                                    resets_at = int(err_obj.get("resets_at") or 0)
+                                    if resets_at > 0:
+                                        from datetime import datetime, timezone as _tz2
+                                        restore_iso = datetime.fromtimestamp(
+                                            resets_at, tz=_tz2.utc
+                                        ).isoformat()
+                            except Exception:
+                                pass
                         updates = {"status": "limited"}
                         if restore_iso:
                             updates["restore_at"] = restore_iso
