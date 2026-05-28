@@ -983,6 +983,25 @@ def _handle_chatgpt_chat(
                 or "rate_limit" in err_msg
                 or "too many requests" in err_msg
             )
+            is_expired = (
+                "token_expired" in err_msg
+                or "token expired" in err_msg
+                or "expired" in err_msg
+            ) and "401" in err_msg
+            if is_expired:
+                # Mark expired account disabled so pool skips it.
+                try:
+                    account_service.update_account(token, {"status": "disabled"})
+                except Exception:
+                    pass
+                logger.info({
+                    "event": "chatgpt_account_rotate",
+                    "reason": "token_expired",
+                    "attempt": attempt,
+                    "preferred_type": preferred_type,
+                })
+                excluded_tokens.add(token)
+                continue
             if not is_quota:
                 raise
             logger.info({
