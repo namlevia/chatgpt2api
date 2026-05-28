@@ -280,11 +280,10 @@ class BrowserPool:
             )
             await context.add_init_script(_STEALTH_INIT_SCRIPT)
         else:
-            # Fallback to patchright (Google Chrome channel)
+            # Fallback to patchright (bundled Chromium with stealth patches)
             assert self._playwright is not None
             context = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(user_data_dir),
-                channel="chrome",
                 headless=headless,
                 no_viewport=False,
                 viewport=_DEFAULT_VIEWPORT,
