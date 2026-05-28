@@ -15,9 +15,10 @@ from __future__ import annotations
 import base64
 import json
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, Request
 from pydantic import BaseModel, Field
 
+from api.support import require_admin
 from services.account_service import account_service
 from utils.log import logger
 
@@ -25,6 +26,7 @@ from utils.log import logger
 class ImportTokenRequest(BaseModel):
     accessToken: str = ""
     name: str | None = None
+    routerPassword: str | None = None
 
 
 class ImportTokenBatchRequest(BaseModel):
@@ -73,17 +75,44 @@ def _extract_account_info(token: str) -> dict:
 def create_router() -> APIRouter:
     router = APIRouter()
 
+    def _check_auth(request: Request, body: ImportTokenRequest, authorization: str | None) -> None:
+        """Authenticate via Authorization header, body password, or query param."""
+        # Standard Bearer token
+        if authorization and authorization.strip():
+            require_admin(authorization)
+            return
+        # Codex Account Studio sends routerPassword in body
+        password = str(body.routerPassword or "").strip()
+        if password:
+            require_admin(f"Bearer {password}")
+            return
+        # Query parameter fallback: ?password=xxx
+        qp = str(request.query_params.get("password") or "").strip()
+        if qp:
+            require_admin(f"Bearer {qp}")
+            return
+        from fastapi import HTTPException
+        raise HTTPException(status_code=401, detail={"error": "Missing authentication"})
+
     @router.post("/api/oauth/codex/import-token")
     @router.post("/dashboard/providers/codex")
-    async def import_token(body: ImportTokenRequest):
+    async def import_token(
+        body: ImportTokenRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
         """Import a single ChatGPT access token — Codex Account Studio compatible.
 
         Accepts the same format as 9router's /api/oauth/codex/import-token:
-          { accessToken: "eyJ...", name?: "optional label" }
+          { accessToken: "eyJ...", name?: "optional label", routerPassword?: "xxx" }
+
+        Auth: Authorization: Bearer <password>, or routerPassword in body,
+        or ?password=xxx query param.
 
         The token is added to the codex account pool and available immediately
         for cx/auto, cx/gpt-5.5, and all other cx/* models.
         """
+        _check_auth(request, body, authorization)
         token = str(body.accessToken or "").strip()
         if not token:
             return {"success": False, "error": "Access token is required"}
@@ -143,13 +172,34 @@ def create_router() -> APIRouter:
         }
 
     @router.post("/api/oauth/codex/import-tokens")
-    async def import_tokens_batch(body: ImportTokenBatchRequest):
+    async def import_tokens_batch(
+        body: ImportTokenBatchRequest,
+        request: Request,
+        authorization: str | None = Header(default=None),
+    ):
         """Batch import multiple tokens — 9router backup compatible.
 
         Accepts: { tokens: [{ accessToken, refreshToken?, expiresAt?, name? }] }
 
         Each token is decoded and added to the codex pool with image support.
         """
+        # Auth check — same as single import
+        from fastapi import HTTPException
+        try:
+            # Batch body doesn't have routerPassword, check header + query param only
+            if authorization and authorization.strip():
+                require_admin(authorization)
+            else:
+                qp = str(request.query_params.get("password") or "").strip()
+                if qp:
+                    require_admin(f"Bearer {qp}")
+                else:
+                    raise HTTPException(status_code=401, detail={"error": "Missing authentication"})
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail={"error": "Missing authentication"})
+
         if not body.tokens:
             return {"success": False, "error": "tokens array is required"}
 
