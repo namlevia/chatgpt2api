@@ -80,8 +80,6 @@ export function SavedAccountsSelect({ csUrl, csApiKey, selected, onSelect, disab
     } catch { toast.error("Lỗi xóa"); }
   }
 
-  if (accounts.length === 0) return null;
-
   return (
     <div className="flex items-end gap-1.5">
       <div className="flex-1">
@@ -92,7 +90,7 @@ export function SavedAccountsSelect({ csUrl, csApiKey, selected, onSelect, disab
           className="mt-1 h-8 w-full rounded-lg border border-stone-200 bg-white text-xs font-mono px-2 text-stone-700"
           disabled={disabled}
         >
-          <option value="">-- Chon tai khoan --</option>
+          <option value="">-- Chon tai khoan ({accounts.length}) --</option>
           {accounts.map((a) => (
             <option key={a.id} value={a.email}>{a.label || a.email}</option>
           ))}

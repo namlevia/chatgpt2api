@@ -1,20 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink, Shield, Save, Trash2, Eye, EyeOff, RefreshCw, Timer } from "lucide-react";
+import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink, Shield, Eye, EyeOff, RefreshCw, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
+import { SavedAccountsSelect } from "@/components/saved-accounts-select";
 import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
-
-type SavedAccount = {
-  id: number;
-  email: string;
-  totp_secret: string;
-  label: string;
-};
 
 type OnboardState = {
   profile: string;
@@ -49,83 +43,8 @@ export function ChatGPTOnboardCard() {
   const [totpCode, setTotpCode] = useState("");
   const [totpRemaining, setTotpRemaining] = useState(30);
   const totpTimerRef = useRef<number | null>(null);
-  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
   const [selectedAccount, setSelectedAccount] = useState("");
   const [showPassword, setShowPassword] = useState(true);
-
-  // Fetch saved accounts
-  async function fetchSavedAccounts() {
-    try {
-      const res = await fetch(`${cs.url}/v1/accounts/saved`, {
-        headers: { Authorization: `Bearer ${cs.apiKey}` },
-      });
-      if (res.ok) setSavedAccounts(await res.json());
-    } catch { /* ignore */ }
-  }
-
-  // Load saved account details to fill form
-  async function loadAccount(email: string) {
-    if (!email) {
-      setDraft({ email: "", password: "", code: "", totpSecret: "" });
-      setSelectedAccount("");
-      return;
-    }
-    setSelectedAccount(email);
-    try {
-      const res = await fetch(`${cs.url}/v1/accounts/saved/${encodeURIComponent(email)}`, {
-        headers: { Authorization: `Bearer ${cs.apiKey}` },
-      });
-      if (res.ok) {
-        const acct = await res.json();
-        setDraft({
-          email: acct.email || "",
-          password: acct.password || "",
-          code: "",
-          totpSecret: acct.totp_secret || "",
-        });
-      }
-    } catch { toast.error("Không load được tài khoản"); }
-  }
-
-  // Save current form to DB
-  async function saveToDb() {
-    if (!draft.email.trim() || !draft.password) {
-      toast.error("Cần email + password để lưu");
-      return;
-    }
-    try {
-      await fetch(`${cs.url}/v1/accounts/saved`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${cs.apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          email: draft.email.trim(),
-          password: draft.password,
-          totp_secret: draft.totpSecret.trim(),
-        }),
-      });
-      toast.success("Đã lưu tài khoản");
-      fetchSavedAccounts();
-    } catch { toast.error("Lỗi lưu tài khoản"); }
-  }
-
-  // Delete saved account
-  async function deleteFromDb(email: string) {
-    try {
-      await fetch(`${cs.url}/v1/accounts/saved/${encodeURIComponent(email)}`, {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${cs.apiKey}` },
-      });
-      toast.success("Đã xóa tài khoản");
-      if (selectedAccount === email) {
-        setSelectedAccount("");
-        setDraft({ email: "", password: "", code: "", totpSecret: "" });
-      }
-      fetchSavedAccounts();
-    } catch { toast.error("Lỗi xóa tài khoản"); }
-  }
 
   // ── Auto-refresh state ──
   const [autoRefreshRunning, setAutoRefreshRunning] = useState(false);
@@ -212,7 +131,6 @@ export function ChatGPTOnboardCard() {
 
   useEffect(() => {
     void fetchCfg();
-    void fetchSavedAccounts();
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
@@ -394,34 +312,16 @@ export function ChatGPTOnboardCard() {
           </p>
 
           {/* Saved accounts dropdown */}
-          {savedAccounts.length > 0 && (
-            <div className="flex items-end gap-1.5">
-              <div className="flex-1">
-                <label className="text-[11px] text-stone-500">Tai khoan da luu</label>
-                <select
-                  value={selectedAccount}
-                  onChange={(e) => loadAccount(e.target.value)}
-                  className="mt-1 h-8 w-full rounded-lg border border-blue-200 bg-white text-xs font-mono px-2 text-stone-700"
-                  disabled={running}
-                >
-                  <option value="">-- Chon tai khoan --</option>
-                  {savedAccounts.map((a) => (
-                    <option key={a.id} value={a.email}>{a.label || a.email}</option>
-                  ))}
-                </select>
-              </div>
-              {selectedAccount && (
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  className="h-8 px-2 text-[10px] text-rose-500 hover:bg-rose-50"
-                  onClick={() => deleteFromDb(selectedAccount)}
-                >
-                  <Trash2 className="size-3" />
-                </Button>
-              )}
-            </div>
-          )}
+          <SavedAccountsSelect
+            csUrl={cs.url}
+            csApiKey={cs.apiKey}
+            selected={selectedAccount}
+            onSelect={(email, acct) => {
+              setSelectedAccount(email);
+              setDraft({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
+            }}
+            disabled={running}
+          />
 
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
@@ -495,13 +395,6 @@ export function ChatGPTOnboardCard() {
               onClick={openNoVNC}
             >
               <ExternalLink className="size-3.5" /> Mở noVNC
-            </Button>
-            <Button
-              className="h-9 rounded-lg border border-green-200 bg-white px-3 text-xs text-green-700 hover:bg-green-50"
-              onClick={saveToDb}
-              disabled={running || !draft.email.trim()}
-            >
-              <Save className="size-3.5" /> Lưu
             </Button>
             <Button
               className="h-9 rounded-lg border border-purple-200 bg-white px-3 text-xs text-purple-700 hover:bg-purple-50"
