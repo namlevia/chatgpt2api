@@ -25,6 +25,7 @@ from utils.log import logger
 
 class ImportTokenRequest(BaseModel):
     accessToken: str = ""
+    refreshToken: str | None = None
     name: str | None = None
     routerPassword: str | None = None
 
@@ -135,10 +136,12 @@ def create_router() -> APIRouter:
         existing = account_service.get_account(token)
         is_new = existing is None
 
+        refresh_token = str(body.refreshToken or "").strip() or None
+
         # Add to codex pool with full credential support
         creds = [{
             "access_token": token,
-            "refresh_token": None,  # Codex Account Studio tokens may not have refresh
+            "refresh_token": refresh_token,
             "expires_at": None,
             "email": email,
         }]

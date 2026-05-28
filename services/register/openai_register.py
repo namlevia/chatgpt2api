@@ -611,7 +611,15 @@ def worker(index: int) -> dict:
         result = registrar.register(index)
         cost = time.time() - start
         access_token = str(result["access_token"])
-        account_service.add_accounts([access_token])
+        refresh_token = str(result.get("refresh_token") or "").strip() or None
+        email = str(result.get("email") or "").strip() or None
+        creds = [{
+            "access_token": access_token,
+            "refresh_token": refresh_token,
+            "expires_at": None,
+            "email": email,
+        }]
+        account_service.add_accounts_with_credentials(creds, "codex")
         account_service.refresh_accounts([access_token])
         with stats_lock:
             stats["done"] += 1

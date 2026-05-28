@@ -36,6 +36,12 @@ def create_app() -> FastAPI:
             start_jwt_refresh()
         except Exception:
             pass
+        # Start Codex OAuth auto-refresh scheduler (8h access_token expiry)
+        try:
+            from services.codex_refresh_scheduler import start as start_codex_refresh
+            start_codex_refresh()
+        except Exception:
+            pass
         # Start models-catalogue auto-refresh (every 6h ± 30 min).
         # Keeps the dynamic gmw/* + cgw/* + codex live lists warm even
         # when nothing hits /v1/models — so the dropdown the user opens
