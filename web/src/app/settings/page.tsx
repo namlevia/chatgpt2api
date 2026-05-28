@@ -69,7 +69,6 @@ function SettingsPageContent() {
           title="Cấu hình hệ thống"
           description="Proxy, rate limit, tự động xóa tài khoản, system prompt, kiểm duyệt AI"
           icon={<Settings className="size-5" />}
-          defaultOpen={true}
         >
           <ConfigCard />
         </SettingsSection>

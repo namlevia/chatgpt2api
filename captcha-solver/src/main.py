@@ -14,10 +14,12 @@ Endpoints (all require Authorization: Bearer <CAPTCHA_SOLVER_API_KEY>):
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import os
 import time
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Optional
 
 import httpx
 from fastapi import Depends, FastAPI, Header, HTTPException
@@ -25,12 +27,23 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from .accounts_db import (
+    delete_account,
+    get_account,
+    list_accounts,
+    save_account,
+)
 from .auto_login import (
     get_session as get_login_session,
     list_sessions as list_login_sessions,
     start_auto_login,
     submit_2fa_code,
 )
+from .chatgpt_login import (
+    get_session as get_chatgpt_session,
+    start_chatgpt_onboard,
+)
+from .chatgpt_login import _sessions as chatgpt_sessions
 from .gemini_web_login import (
     get_session as get_gemini_web_session,
     start_gemini_web_login,
@@ -50,6 +63,12 @@ from .solvers.browser_run import browser_run
 from .solvers.flow_google import (
     generate_image as flow_generate_image,
     get_or_create_project as flow_get_or_create_project,
+)
+from .solvers.chatgpt_web import (
+    analyze_image as chatgpt_web_analyze_image,
+    chat as chatgpt_web_chat,
+    generate_image as chatgpt_web_generate_image,
+    list_models as chatgpt_web_list_models,
 )
 from .solvers.phatnguoi import lookup_phatnguoi
 from .solvers.recaptcha import solve_recaptcha_v2, solve_recaptcha_v3
@@ -961,3 +980,373 @@ async def api_session_status(profile: str) -> dict[str, Any]:
 async def api_session_close(profile: str) -> dict[str, Any]:
     closed = await pool.close_profile(profile)
     return {"profile": profile, "closed": closed}
+
+
+# ── ChatGPT onboard ──────────────────────────────────────────────────────
+
+class ChatGPTOnboardReq(BaseModel):
+    profile: str = "chatgpt-default"
+    email: str
+    password: str
+    totp_secret: str = ""
+
+
+class ChatGPT2FACodeReq(BaseModel):
+    code: str
+
+
+@app.post("/v1/chatgpt/onboard", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_onboard(req: ChatGPTOnboardReq) -> dict[str, Any]:
+    """Onboard ChatGPT via Google. If totp_secret provided, 2FA is automatic."""
+    session = await start_chatgpt_onboard(
+        profile=req.profile,
+        email=req.email,
+        password=req.password,
+        totp_secret=req.totp_secret,
+    )
+    return {
+        **session.to_dict(),
+        "note": "Poll /v1/chatgpt/{profile}/onboard-status. "
+                "Mo noVNC de giam sat/can thiep khi can.",
+    }
+
+
+@app.get("/v1/chatgpt/{profile}/onboard-status", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_onboard_status(profile: str) -> dict[str, Any]:
+    session = get_chatgpt_session(profile)
+    if not session:
+        return {"profile": profile, "state": "none", "message": "Chua co phien onboard"}
+    return session.to_dict()
+
+
+@app.post("/v1/chatgpt/{profile}/onboard-2fa-code", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_onboard_2fa_code(profile: str, req: ChatGPT2FACodeReq) -> dict[str, Any]:
+    session = get_chatgpt_session(profile)
+    if not session or session.state != "need_code":
+        raise HTTPException(400, "Session khong o state need_code")
+    session.pending_code = req.code.strip()
+    return {"profile": profile, "state": session.state, "message": "Da nhan ma"}
+
+
+@app.get("/v1/chatgpt/{profile}/refresh-jwt", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_refresh_jwt(profile: str) -> dict[str, Any]:
+    """Re-scrape JWT from session, or full re-login if expired.
+
+    Strategy:
+    1. Try scraping JWT from existing browser session (fast)
+    2. If JWT missing/expired, look up saved credentials from accounts_db
+    3. Run full ChatGPT onboard with saved email/password/totp_secret
+    4. Return fresh JWT
+    """
+    # Step 1: Try quick scrape from existing session
+    try:
+        async with pool.page(profile=profile, headless=True) as page:
+            if "chatgpt.com" not in (page.url or ""):
+                await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=20_000)
+                await asyncio.sleep(3.0)
+            from .chatgpt_login import _scrape_chatgpt_token
+            token, email, preview = await _scrape_chatgpt_token(page)
+            if token:
+                logger.info("refresh_jwt: quick scrape OK for %s", profile)
+                return {
+                    "profile": profile,
+                    "ok": True,
+                    "method": "scrape",
+                    "access_token": token,
+                    "access_token_preview": preview,
+                    "captured_email": email,
+                }
+    except Exception:
+        pass
+
+    # Step 2: Quick scrape failed — try full re-login with saved credentials
+    from .accounts_db import get_account as db_get_account
+    acct = db_get_account(profile)
+    if not acct:
+        # Try finding account by profile naming convention: chatgpt-<localpart>
+        return {"profile": profile, "ok": False, "error": "Session expired + no saved credentials found for this profile"}
+
+    logger.info("refresh_jwt: session expired for %s, re-logging in with saved credentials", profile)
+    try:
+        from .chatgpt_login import start_chatgpt_onboard, get_session as get_chatgpt_session
+
+        # Kill old session
+        await pool.close_profile(profile)
+
+        # Start re-login
+        session = await start_chatgpt_onboard(
+            profile=profile,
+            email=acct["email"],
+            password=acct["password"],
+            totp_secret=acct.get("totp_secret", ""),
+        )
+
+        # Wait for completion (poll up to 5 minutes)
+        deadline = time.time() + 300
+        while time.time() < deadline:
+            await asyncio.sleep(2.0)
+            s = get_chatgpt_session(profile)
+            if not s:
+                continue
+            if s.state == "success":
+                if s.access_token:
+                    # Update chatgpt2api accounts pool
+                    await _update_chatgpt2api_token(s.access_token)
+                    return {
+                        "profile": profile,
+                        "ok": True,
+                        "method": "relogin",
+                        "access_token": s.access_token,
+                        "access_token_preview": s.access_token_preview,
+                        "captured_email": s.captured_email,
+                    }
+                return {"profile": profile, "ok": False, "error": "Re-login OK but no token scraped"}
+            if s.state == "failed":
+                return {"profile": profile, "ok": False, "error": s.error or "Re-login failed"}
+
+        return {"profile": profile, "ok": False, "error": "Re-login timed out after 5 min"}
+    except Exception as exc:
+        logger.exception("refresh_jwt: re-login error for %s", profile)
+        return {"profile": profile, "ok": False, "error": str(exc)[:200]}
+
+
+async def _update_chatgpt2api_token(access_token: str) -> None:
+    """POST fresh token to chatgpt2api's accounts pool."""
+    try:
+        chatgpt2api_url = os.environ.get("CHATGPT2API_URL", "http://chatgpt2api:8100")
+        async with httpx.AsyncClient(timeout=15) as client:
+            r = await client.post(
+                f"{chatgpt2api_url}/api/accounts",
+                json={"tokens": [access_token]},
+                headers={"Content-Type": "application/json"},
+            )
+            if r.status_code < 400:
+                logger.info("refresh_jwt: updated chatgpt2api pool OK")
+            else:
+                logger.warning("refresh_jwt: chatgpt2api returned %s: %s", r.status_code, r.text[:200])
+    except Exception as exc:
+        logger.warning("refresh_jwt: failed to update chatgpt2api: %s", str(exc)[:120])
+
+
+@app.post("/v1/chatgpt/{profile}/relogin-via-google", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_relogin_via_google(profile: str) -> dict[str, Any]:
+    """Force re-login via Google OAuth for an existing ChatGPT profile using saved credentials."""
+    from .accounts_db import get_account as db_get_account
+    acct = db_get_account(profile)
+    if not acct:
+        raise HTTPException(404, f"No saved credentials for profile '{profile}'")
+
+    await pool.close_profile(profile)
+    from .chatgpt_login import start_chatgpt_onboard
+    session = await start_chatgpt_onboard(
+        profile=profile,
+        email=acct["email"],
+        password=acct["password"],
+        totp_secret=acct.get("totp_secret", ""),
+    )
+    return {
+        **session.to_dict(),
+        "note": "Poll /v1/chatgpt/{profile}/onboard-status de theo doi.",
+    }
+
+
+# ── Background token auto-refresh scheduler ──────────────────────────────
+
+_refresh_task: Optional[asyncio.Task] = None
+_refresh_running = False
+
+
+async def _auto_refresh_loop(interval_minutes: int = 30):
+    """Background loop that refreshes all saved accounts' tokens periodically."""
+    global _refresh_running
+    _refresh_running = True
+    logger.info("auto_refresh: started (interval=%d min)", interval_minutes)
+
+    while _refresh_running:
+        try:
+            from .accounts_db import list_accounts as db_list
+
+            accounts = db_list()
+            for acct in accounts:
+                if not _refresh_running:
+                    break
+                email = acct["email"]
+                profile = "chatgpt-" + email.split("@")[0].replace(".", "-")
+
+                try:
+                    logger.info("auto_refresh: refreshing %s (profile=%s)", email, profile)
+                    # Quick scrape first
+                    async with pool.page(profile=profile, headless=True) as page:
+                        if "chatgpt.com" not in (page.url or ""):
+                            await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=20_000)
+                            await asyncio.sleep(3.0)
+                        from .chatgpt_login import _scrape_chatgpt_token
+                        token, _, preview = await _scrape_chatgpt_token(page)
+                        if token:
+                            await _update_chatgpt2api_token(token)
+                            logger.info("auto_refresh: %s OK (scrape)", email)
+                            continue
+                except Exception as exc:
+                    logger.warning("auto_refresh: scrape failed for %s: %s", email, str(exc)[:100])
+
+                # Scrape failed — full re-login
+                try:
+                    full = db_get_account(email)
+                    if not full:
+                        continue
+
+                    await pool.close_profile(profile)
+                    await asyncio.sleep(1.0)
+
+                    session = await start_chatgpt_onboard(
+                        profile=profile,
+                        email=full["email"],
+                        password=full["password"],
+                        totp_secret=full.get("totp_secret", ""),
+                    )
+
+                    deadline = time.time() + 300
+                    while time.time() < deadline and _refresh_running:
+                        await asyncio.sleep(2.0)
+                        s = get_chatgpt_session(profile)
+                        if not s:
+                            continue
+                        if s.state == "success" and s.access_token:
+                            await _update_chatgpt2api_token(s.access_token)
+                            logger.info("auto_refresh: %s OK (relogin)", email)
+                            break
+                        if s.state == "failed":
+                            logger.warning("auto_refresh: %s re-login failed: %s", email, s.error)
+                            break
+                except Exception as exc:
+                    logger.warning("auto_refresh: %s error: %s", email, str(exc)[:100])
+
+        except Exception as exc:
+            logger.warning("auto_refresh: loop error: %s", str(exc)[:120])
+
+        # Sleep between refresh cycles
+        for _ in range(interval_minutes * 60):
+            if not _refresh_running:
+                break
+            await asyncio.sleep(1.0)
+
+    logger.info("auto_refresh: stopped")
+
+
+@app.post("/v1/chatgpt/auto-refresh/start", dependencies=[Depends(require_api_key)])
+async def api_auto_refresh_start(interval_minutes: int = 30) -> dict[str, Any]:
+    """Start background auto-refresh for all saved accounts."""
+    global _refresh_task, _refresh_running
+    if _refresh_running:
+        return {"ok": True, "message": "Auto-refresh da chay san", "interval_minutes": interval_minutes}
+    _refresh_task = asyncio.create_task(_auto_refresh_loop(interval_minutes))
+    return {"ok": True, "message": f"Auto-refresh started (interval={interval_minutes} min)"}
+
+
+@app.post("/v1/chatgpt/auto-refresh/stop", dependencies=[Depends(require_api_key)])
+async def api_auto_refresh_stop() -> dict[str, Any]:
+    """Stop background auto-refresh."""
+    global _refresh_running, _refresh_task
+    _refresh_running = False
+    if _refresh_task:
+        _refresh_task.cancel()
+        _refresh_task = None
+    return {"ok": True, "message": "Auto-refresh stopped"}
+
+
+@app.get("/v1/chatgpt/auto-refresh/status", dependencies=[Depends(require_api_key)])
+async def api_auto_refresh_status() -> dict[str, Any]:
+    """Check auto-refresh status."""
+    return {"running": _refresh_running}
+
+
+# ── ChatGPT Web (chatgpt.com direct) ─────────────────────────────────────
+
+class ChatGPTWebChatReq(BaseModel):
+    profile: str = "chatgpt-default"
+    prompt: str
+    timeout: int = 90
+    headless: bool = True
+
+
+class ChatGPTWebImageReq(BaseModel):
+    profile: str = "chatgpt-default"
+    image: str  # data: URL or https URL
+    prompt: str = "Phan tich noi dung anh nay mot cach chi tiet."
+    timeout: int = 120
+    headless: bool = True
+
+
+@app.get("/v1/chatgpt-web/{profile}/models", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_web_models(profile: str) -> dict[str, Any]:
+    return await chatgpt_web_list_models(profile=profile, headless=True, timeout=30)
+
+
+@app.post("/v1/chatgpt-web/chat", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_web_chat(req: ChatGPTWebChatReq) -> dict[str, Any]:
+    return await chatgpt_web_chat(
+        profile=req.profile,
+        prompt=req.prompt,
+        timeout=req.timeout,
+        headless=req.headless,
+    )
+
+
+@app.post("/v1/chatgpt-web/generate-image", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_web_generate_image(req: ChatGPTWebChatReq) -> dict[str, Any]:
+    return await chatgpt_web_generate_image(
+        profile=req.profile,
+        prompt=req.prompt,
+        timeout=req.timeout,
+        headless=req.headless,
+    )
+
+
+@app.post("/v1/chatgpt-web/analyze-image", dependencies=[Depends(require_api_key)])
+async def api_chatgpt_web_analyze_image(req: ChatGPTWebImageReq) -> dict[str, Any]:
+    return await chatgpt_web_analyze_image(
+        profile=req.profile,
+        image=req.image,
+        prompt=req.prompt,
+        timeout=req.timeout,
+        headless=req.headless,
+    )
+
+
+# ── Saved Accounts (SQLite) ──────────────────────────────────────────────
+
+class SaveAccountReq(BaseModel):
+    email: str
+    password: str
+    totp_secret: str = ""
+    label: str = ""
+
+
+@app.get("/v1/accounts/saved", dependencies=[Depends(require_api_key)])
+async def api_accounts_list() -> list[dict]:
+    """List saved accounts (no passwords exposed)."""
+    return list_accounts()
+
+
+@app.get("/v1/accounts/saved/{email}", dependencies=[Depends(require_api_key)])
+async def api_accounts_get(email: str) -> dict[str, Any]:
+    """Get full account details including password (for auto-login)."""
+    acct = get_account(email)
+    if not acct:
+        raise HTTPException(404, "Account not found")
+    return dict(acct)
+
+
+@app.post("/v1/accounts/saved", dependencies=[Depends(require_api_key)])
+async def api_accounts_save(req: SaveAccountReq) -> dict[str, Any]:
+    """Save or update a saved account."""
+    return save_account(req.email, req.password, req.totp_secret, req.label)
+
+
+@app.delete("/v1/accounts/saved/{email}", dependencies=[Depends(require_api_key)])
+async def api_accounts_delete(email: str) -> dict[str, Any]:
+    """Delete a saved account."""
+    ok = delete_account(email)
+    if not ok:
+        raise HTTPException(404, "Account not found")
+    return {"ok": True, "email": email}

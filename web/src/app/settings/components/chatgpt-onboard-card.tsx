@@ -1,12 +1,20 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink } from "lucide-react";
+import { useEffect, useRef, useState, useCallback } from "react";
+import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink, Shield, Save, Trash2, Eye, EyeOff, RefreshCw, Timer } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
+import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
+
+type SavedAccount = {
+  id: number;
+  email: string;
+  totp_secret: string;
+  label: string;
+};
 
 type OnboardState = {
   profile: string;
@@ -32,15 +40,179 @@ export function ChatGPTOnboardCard() {
   // providers.flow — admins shouldn't have to enter them twice.
   const [cs, setCs] = useState<CaptchaSolverCfg>({
     url: "http://172.16.10.38:8010",
-    apiKey: "AnhNhi@0610",
+    apiKey: "",
   });
-  const [draft, setDraft] = useState({ email: "", password: "", code: "" });
+  const [draft, setDraft] = useState({ email: "", password: "", code: "", totpSecret: "" });
   const [running, setRunning] = useState(false);
   const [session, setSession] = useState<OnboardState | null>(null);
   const pollRef = useRef<number | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpRemaining, setTotpRemaining] = useState(30);
+  const totpTimerRef = useRef<number | null>(null);
+  const [savedAccounts, setSavedAccounts] = useState<SavedAccount[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState("");
+  const [showPassword, setShowPassword] = useState(true);
+
+  // Fetch saved accounts
+  async function fetchSavedAccounts() {
+    try {
+      const res = await fetch(`${cs.url}/v1/accounts/saved`, {
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      if (res.ok) setSavedAccounts(await res.json());
+    } catch { /* ignore */ }
+  }
+
+  // Load saved account details to fill form
+  async function loadAccount(email: string) {
+    if (!email) {
+      setDraft({ email: "", password: "", code: "", totpSecret: "" });
+      setSelectedAccount("");
+      return;
+    }
+    setSelectedAccount(email);
+    try {
+      const res = await fetch(`${cs.url}/v1/accounts/saved/${encodeURIComponent(email)}`, {
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      if (res.ok) {
+        const acct = await res.json();
+        setDraft({
+          email: acct.email || "",
+          password: acct.password || "",
+          code: "",
+          totpSecret: acct.totp_secret || "",
+        });
+      }
+    } catch { toast.error("Không load được tài khoản"); }
+  }
+
+  // Save current form to DB
+  async function saveToDb() {
+    if (!draft.email.trim() || !draft.password) {
+      toast.error("Cần email + password để lưu");
+      return;
+    }
+    try {
+      await fetch(`${cs.url}/v1/accounts/saved`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${cs.apiKey}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          email: draft.email.trim(),
+          password: draft.password,
+          totp_secret: draft.totpSecret.trim(),
+        }),
+      });
+      toast.success("Đã lưu tài khoản");
+      fetchSavedAccounts();
+    } catch { toast.error("Lỗi lưu tài khoản"); }
+  }
+
+  // Delete saved account
+  async function deleteFromDb(email: string) {
+    try {
+      await fetch(`${cs.url}/v1/accounts/saved/${encodeURIComponent(email)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      toast.success("Đã xóa tài khoản");
+      if (selectedAccount === email) {
+        setSelectedAccount("");
+        setDraft({ email: "", password: "", code: "", totpSecret: "" });
+      }
+      fetchSavedAccounts();
+    } catch { toast.error("Lỗi xóa tài khoản"); }
+  }
+
+  // ── Auto-refresh state ──
+  const [autoRefreshRunning, setAutoRefreshRunning] = useState(false);
+  const [refreshInterval, setRefreshInterval] = useState(30);
+
+  async function checkAutoRefreshStatus() {
+    try {
+      const res = await fetch(`${cs.url}/v1/chatgpt/auto-refresh/status`, {
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setAutoRefreshRunning(data.running);
+      }
+    } catch { /* ignore */ }
+  }
+
+  async function toggleAutoRefresh() {
+    try {
+      if (autoRefreshRunning) {
+        await fetch(`${cs.url}/v1/chatgpt/auto-refresh/stop`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cs.apiKey}` },
+        });
+        setAutoRefreshRunning(false);
+        toast.success("Đã dừng auto-refresh");
+      } else {
+        await fetch(`${cs.url}/v1/chatgpt/auto-refresh/start?interval_minutes=${refreshInterval}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${cs.apiKey}` },
+        });
+        setAutoRefreshRunning(true);
+        toast.success(`Auto-refresh mỗi ${refreshInterval} phút`);
+      }
+    } catch { toast.error("Lỗi auto-refresh"); }
+  }
+
+  async function refreshNow() {
+    if (!draft.email.trim()) {
+      toast.error("Chọn tài khoản trước");
+      return;
+    }
+    const profile = profileSuggestion();
+    toast.info(`Đang refresh token cho ${profile}...`);
+    try {
+      const res = await fetch(`${cs.url}/v1/chatgpt/${encodeURIComponent(profile)}/refresh-jwt`, {
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      const data = await res.json();
+      if (data.ok) {
+        toast.success(`Refresh OK (${data.method}): ${data.access_token_preview}`);
+      } else {
+        toast.error(`Refresh fail: ${data.error}`);
+      }
+    } catch { toast.error("Lỗi gọi refresh"); }
+  }
+
+  // Check auto-refresh status on mount
+  useEffect(() => {
+    void checkAutoRefreshStatus();
+  }, []);
+
+  // Auto-refresh TOTP code when secret is provided
+  const refreshTotp = useCallback(async (secret: string) => {
+    if (!secret.trim()) { setTotpCode(""); return; }
+    try {
+      const code = await generateTotpCode(secret);
+      setTotpCode(code);
+      setTotpRemaining(totpSecondsRemaining());
+    } catch { setTotpCode(""); }
+  }, []);
+
+  // Keep TOTP code live
+  useEffect(() => {
+    if (!draft.totpSecret.trim()) { setTotpCode(""); return; }
+    void refreshTotp(draft.totpSecret);
+    totpTimerRef.current = window.setInterval(() => {
+      void refreshTotp(draft.totpSecret);
+    }, 5000);
+    return () => {
+      if (totpTimerRef.current) window.clearInterval(totpTimerRef.current);
+    };
+  }, [draft.totpSecret, refreshTotp]);
 
   useEffect(() => {
     void fetchCfg();
+    void fetchSavedAccounts();
     return () => {
       if (pollRef.current) window.clearInterval(pollRef.current);
     };
@@ -52,7 +224,7 @@ export function ChatGPTOnboardCard() {
       const flow = ((data.data as any)?.config?.providers || {}).flow || {};
       setCs({
         url: flow.captcha_solver_url || "http://172.16.10.38:8010",
-        apiKey: flow.captcha_solver_api_key || "AnhNhi@0610",
+        apiKey: flow.captcha_solver_api_key || "",
       });
     } catch (e) {
       console.error(e);
@@ -116,6 +288,7 @@ export function ChatGPTOnboardCard() {
           profile,
           email: draft.email.trim(),
           password: draft.password,
+          totp_secret: draft.totpSecret.trim(),
         }),
       });
       if (!res.ok) throw new Error(`onboard HTTP ${res.status}`);
@@ -136,7 +309,7 @@ export function ChatGPTOnboardCard() {
         try {
           await request.post("/api/accounts", { tokens: [s.access_token] });
           toast.success(`Đã thêm account ${s.captured_email} vào pool 🎉`);
-          setDraft({ email: "", password: "", code: "" });
+          setDraft({ email: "", password: "", code: "", totpSecret: "" });
         } catch (e: any) {
           toast.error(`Add to pool fail: ${e?.message || e}`);
         } finally {
@@ -184,7 +357,7 @@ export function ChatGPTOnboardCard() {
     stopPolling();
     setSession(null);
     setRunning(false);
-    setDraft({ email: "", password: "", code: "" });
+    setDraft({ email: "", password: "", code: "", totpSecret: "" });
   }
 
   function openNoVNC() {
@@ -219,6 +392,37 @@ export function ChatGPTOnboardCard() {
             login qua trang Google (cùng flow như Flow), redirect về chatgpt.com, scrape JWT, save vào pool.
             Khi gặp 2FA, dùng panel xanh chàm bên dưới.
           </p>
+
+          {/* Saved accounts dropdown */}
+          {savedAccounts.length > 0 && (
+            <div className="flex items-end gap-1.5">
+              <div className="flex-1">
+                <label className="text-[11px] text-stone-500">Tai khoan da luu</label>
+                <select
+                  value={selectedAccount}
+                  onChange={(e) => loadAccount(e.target.value)}
+                  className="mt-1 h-8 w-full rounded-lg border border-blue-200 bg-white text-xs font-mono px-2 text-stone-700"
+                  disabled={running}
+                >
+                  <option value="">-- Chon tai khoan --</option>
+                  {savedAccounts.map((a) => (
+                    <option key={a.id} value={a.email}>{a.label || a.email}</option>
+                  ))}
+                </select>
+              </div>
+              {selectedAccount && (
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-8 px-2 text-[10px] text-rose-500 hover:bg-rose-50"
+                  onClick={() => deleteFromDb(selectedAccount)}
+                >
+                  <Trash2 className="size-3" />
+                </Button>
+              )}
+            </div>
+          )}
+
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
               <label className="text-[11px] text-stone-500">Email Google</label>
@@ -233,16 +437,48 @@ export function ChatGPTOnboardCard() {
             </div>
             <div>
               <label className="text-[11px] text-stone-500">Mật khẩu Google</label>
-              <Input
-                type="password"
-                value={draft.password}
-                onChange={(e) => setDraft({ ...draft, password: e.target.value })}
-                placeholder="••••••••"
-                className="mt-1 h-8 rounded-lg border-blue-200 text-xs font-mono"
-                autoComplete="off"
-                disabled={running}
-              />
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={draft.password}
+                  onChange={(e) => setDraft({ ...draft, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="mt-1 h-8 rounded-lg border-blue-200 text-xs font-mono pr-8"
+                  autoComplete="off"
+                  disabled={running}
+                />
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                </button>
+              </div>
             </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-stone-500 flex items-center gap-1">
+              <Shield className="size-3" /> TOTP Secret (Authenticator — bỏ qua dấu cách, tự sinh mã khi bật)
+            </label>
+            <Input
+              value={draft.totpSecret}
+              onChange={(e) => setDraft({ ...draft, totpSecret: e.target.value })}
+              placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
+              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
+              autoComplete="off"
+              disabled={running}
+            />
+            {totpCode && (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-[11px] text-amber-700">Ma hien tai:</span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-sm font-bold tracking-widest">
+                  {totpCode}
+                </span>
+                <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
@@ -260,6 +496,20 @@ export function ChatGPTOnboardCard() {
             >
               <ExternalLink className="size-3.5" /> Mở noVNC
             </Button>
+            <Button
+              className="h-9 rounded-lg border border-green-200 bg-white px-3 text-xs text-green-700 hover:bg-green-50"
+              onClick={saveToDb}
+              disabled={running || !draft.email.trim()}
+            >
+              <Save className="size-3.5" /> Lưu
+            </Button>
+            <Button
+              className="h-9 rounded-lg border border-purple-200 bg-white px-3 text-xs text-purple-700 hover:bg-purple-50"
+              onClick={refreshNow}
+              disabled={running || !draft.email.trim()}
+            >
+              <RefreshCw className="size-3.5" /> Refresh ngay
+            </Button>
             {session && session.state !== "none" && (
               <Button
                 className="h-9 rounded-lg border border-stone-200 bg-white px-3 text-xs text-stone-600 hover:bg-stone-50"
@@ -267,6 +517,36 @@ export function ChatGPTOnboardCard() {
               >
                 <X className="size-3.5" /> Đóng phiên
               </Button>
+            )}
+          </div>
+
+          {/* Auto-refresh controls */}
+          <div className="flex items-center gap-2 pt-1 border-t border-blue-200/50">
+            <Timer className="size-3.5 text-purple-600" />
+            <span className="text-[11px] text-stone-600">Auto-refresh token:</span>
+            <button
+              onClick={toggleAutoRefresh}
+              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
+                autoRefreshRunning
+                  ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+                  : "bg-stone-100 text-stone-500 hover:bg-stone-200"
+              }`}
+            >
+              {autoRefreshRunning ? "ON" : "OFF"}
+            </button>
+            {!autoRefreshRunning && (
+              <>
+                <span className="text-[10px] text-stone-400">mỗi</span>
+                <input
+                  type="number"
+                  value={refreshInterval}
+                  onChange={(e) => setRefreshInterval(Math.max(5, Math.min(120, Number(e.target.value))))}
+                  className="w-12 h-6 rounded border border-stone-200 text-center text-[10px]"
+                  min={5}
+                  max={120}
+                />
+                <span className="text-[10px] text-stone-400">phút</span>
+              </>
             )}
           </div>
 
@@ -313,24 +593,40 @@ export function ChatGPTOnboardCard() {
               )}
 
               {session.state === "need_code" && (
-                <div className="flex items-end gap-2">
-                  <div className="flex-1">
-                    <label className="text-[11px] text-amber-800">Mã 2FA (SMS hoặc Authenticator)</label>
-                    <Input
-                      value={draft.code}
-                      onChange={(e) => setDraft({ ...draft, code: e.target.value })}
-                      placeholder="123456"
-                      className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono"
-                      autoComplete="off"
-                      onKeyDown={(e) => { if (e.key === "Enter") void submit2faCode(); }}
-                    />
+                <div className="space-y-2">
+                  {/* Auto-generated TOTP code when secret is available */}
+                  {totpCode && (
+                    <div className="flex items-center gap-2 rounded-md bg-amber-100/70 px-2 py-1.5">
+                      <Shield className="size-4 text-amber-700" />
+                      <span className="text-amber-800 text-[11px]">Ma tu sinh tu TOTP secret:</span>
+                      <span className="text-amber-900 font-mono text-lg font-bold tracking-widest">
+                        {totpCode}
+                      </span>
+                      <span className="text-[10px] text-amber-500 ml-auto">({totpRemaining}s)</span>
+                    </div>
+                  )}
+                  {/* Manual fallback input */}
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <label className="text-[11px] text-amber-800">
+                        {totpCode ? "Hoac nhap thu cong:" : "Ma 2FA (SMS hoac Authenticator)"}
+                      </label>
+                      <Input
+                        value={draft.code}
+                        onChange={(e) => setDraft({ ...draft, code: e.target.value })}
+                        placeholder="123456"
+                        className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono"
+                        autoComplete="off"
+                        onKeyDown={(e) => { if (e.key === "Enter") void submit2faCode(); }}
+                      />
+                    </div>
+                    <Button
+                      className="h-8 rounded-lg bg-amber-600 px-3 text-xs text-white hover:bg-amber-700"
+                      onClick={submit2faCode}
+                    >
+                      Gửi mã
+                    </Button>
                   </div>
-                  <Button
-                    className="h-8 rounded-lg bg-amber-600 px-3 text-xs text-white hover:bg-amber-700"
-                    onClick={submit2faCode}
-                  >
-                    Gửi mã
-                  </Button>
                 </div>
               )}
 

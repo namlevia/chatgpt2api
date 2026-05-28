@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { LoaderCircle, Sparkles, ExternalLink, X, Save } from "lucide-react";
+import { LoaderCircle, Sparkles, ExternalLink, X, Save, Shield } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
+import { SavedAccountsSelect } from "@/components/saved-accounts-select";
+import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
 
 type OnboardState = {
   profile: string;
@@ -21,15 +23,33 @@ type CSCfg = { url: string; apiKey: string };
 export function GeminiWebCard() {
   const [cs, setCs] = useState<CSCfg>({
     url: "http://172.16.10.38:8010",
-    apiKey: "AnhNhi@0610",
+    apiKey: "",
   });
   const [profile, setProfile] = useState("gemini-web-default");
   const [timeout, setTimeoutVal] = useState(120);
-  const [draft, setDraft] = useState({ email: "", password: "" });
+  const [draft, setDraft] = useState({ email: "", password: "", totpSecret: "" });
+  const [selectedAccount, setSelectedAccount] = useState("");
   const [running, setRunning] = useState(false);
   const [session, setSession] = useState<OnboardState | null>(null);
   const [savingCfg, setSavingCfg] = useState(false);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpRemaining, setTotpRemaining] = useState(30);
   const pollRef = useRef<number | null>(null);
+  const totpTimerRef = useRef<number | null>(null);
+
+  // Auto-refresh TOTP code
+  useEffect(() => {
+    if (!draft.totpSecret.trim()) { setTotpCode(""); return; }
+    const refresh = async () => {
+      try {
+        setTotpCode(await generateTotpCode(draft.totpSecret));
+        setTotpRemaining(totpSecondsRemaining());
+      } catch { setTotpCode(""); }
+    };
+    void refresh();
+    totpTimerRef.current = window.setInterval(refresh, 5000);
+    return () => { if (totpTimerRef.current) window.clearInterval(totpTimerRef.current); };
+  }, [draft.totpSecret]);
 
   useEffect(() => {
     void fetchCfg();
@@ -46,7 +66,7 @@ export function GeminiWebCard() {
       const gemw = cfg.gemini_web || {};
       setCs({
         url: flow.captcha_solver_url || "http://172.16.10.38:8010",
-        apiKey: flow.captcha_solver_api_key || "AnhNhi@0610",
+        apiKey: flow.captcha_solver_api_key || "",
       });
       setProfile(gemw.profile || "gemini-web-default");
       setTimeoutVal(Number(gemw.timeout) || 120);
@@ -118,7 +138,7 @@ export function GeminiWebCard() {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          profile, email: draft.email.trim(), password: draft.password,
+          profile, email: draft.email.trim(), password: draft.password, totp_secret: draft.totpSecret.trim(),
         }),
       });
       if (!res.ok) throw new Error(`onboard HTTP ${res.status}`);
@@ -141,6 +161,8 @@ export function GeminiWebCard() {
     stopPolling();
     setSession(null);
     setRunning(false);
+    setDraft({ email: "", password: "", totpSecret: "" });
+    setSelectedAccount("");
   }
 
   return (
@@ -197,6 +219,16 @@ export function GeminiWebCard() {
             Nếu profile đã login Google (qua Flow/ChatGPT onboard), short-circuit success ngay.
             Nếu chưa, mở Playwright + login chuẩn — theo dõi qua noVNC khi cần thao tác manual.
           </p>
+          <SavedAccountsSelect
+            csUrl={cs.url}
+            csApiKey={cs.apiKey}
+            selected={selectedAccount}
+            onSelect={(email, acct) => {
+              setSelectedAccount(email);
+              setDraft({ email: acct.email, password: acct.password, totpSecret: acct.totp_secret || "" });
+            }}
+            disabled={running}
+          />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
               <label className="text-[11px] text-stone-500">Email Google</label>
@@ -217,6 +249,27 @@ export function GeminiWebCard() {
                 autoComplete="off" disabled={running}
               />
             </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-stone-500 flex items-center gap-1">
+              <Shield className="size-3" /> TOTP Secret
+            </label>
+            <Input
+              value={draft.totpSecret}
+              onChange={(e) => setDraft({ ...draft, totpSecret: e.target.value })}
+              placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
+              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
+              autoComplete="off" disabled={running}
+            />
+            {totpCode && (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-[11px] text-amber-700">Ma hien tai:</span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-sm font-bold tracking-widest">
+                  {totpCode}
+                </span>
+                <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button

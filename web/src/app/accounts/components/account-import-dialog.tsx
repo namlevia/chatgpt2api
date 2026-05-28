@@ -132,7 +132,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   const [multiResults, setMultiResults] = useState<Record<string, any>>({});
   const [csCfg, setCsCfg] = useState<{ url: string; apiKey: string }>({
     url: "http://172.16.10.38:8010",
-    apiKey: "AnhNhi@0610",
+    apiKey: "",
   });
   const multiPollRef = useRef<number | null>(null);
 
@@ -147,7 +147,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
         if (flow.captcha_solver_url || flow.captcha_solver_api_key) {
           setCsCfg({
             url: flow.captcha_solver_url || "http://172.16.10.38:8010",
-            apiKey: flow.captcha_solver_api_key || "AnhNhi@0610",
+            apiKey: flow.captcha_solver_api_key || "",
           });
         }
       } catch {/* keep defaults */}

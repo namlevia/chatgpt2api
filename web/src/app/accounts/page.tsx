@@ -56,6 +56,7 @@ import {
   type AccountStatus,
 } from "@/lib/api";
 import { request } from "@/lib/request";
+import { AccountTotpDisplay } from "@/components/account-totp-display";
 import { useAuthGuard } from "@/lib/use-auth-guard";
 import { cn } from "@/lib/utils";
 import { useLangStore } from "@/store/lang";
@@ -1099,6 +1100,13 @@ function AccountsPageContent() {
                                             </div>
                                           </div>
                                         </div>
+                                      </div>
+                                      {/* TOTP Authenticator display */}
+                                      <div className="mt-3">
+                                        <AccountTotpDisplay
+                                          email={account.email || accountLabel(account)}
+                                          label={account.email || accountLabel(account)}
+                                        />
                                       </div>
                                     </div>
                                   )}

@@ -19,11 +19,19 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from dataclasses import dataclass, field
 from typing import Optional
 
 from .browser_pool import pool
+
+try:
+    import pyotp
+    _HAS_PYOTP = True
+except ImportError:
+    pyotp = None  # type: ignore
+    _HAS_PYOTP = False
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +43,17 @@ _GOOGLE_SIGNIN_URL = (
 
 # Cookies that prove a Google login completed.
 _GOOGLE_LOGIN_COOKIES = ("__Secure-1PSID", "__Secure-3PSID", "SID")
+
+async def _type_human_like(locator, text: str) -> None:
+    """Type text character-by-character with randomized delays to evade bot detection."""
+    # Random pause before starting (human looks at phone, then starts typing)
+    await asyncio.sleep(random.uniform(0.4, 1.2))
+    for i, ch in enumerate(text):
+        await locator.press(ch, delay=random.randint(80, 350))
+        # Occasionally pause mid-code (human glances at phone between digits)
+        if i == 2 and random.random() < 0.6:
+            await asyncio.sleep(random.uniform(0.2, 0.6))
+
 
 # Selectors Google uses for the 2FA code input (varies by challenge type).
 _2FA_CODE_SELECTORS = (
@@ -217,6 +236,7 @@ class LoginSession:
     message: str = ""
     tap_number: Optional[str] = None
     pending_code: Optional[str] = None
+    totp_secret: Optional[str] = None
     started_at: float = field(default_factory=time.time)
     completed_at: Optional[float] = None
     error: Optional[str] = None
@@ -267,6 +287,7 @@ async def start_auto_login(
     email: str,
     password: str,
     prefer_method: str = "auth",
+    totp_secret: Optional[str] = None,
 ) -> LoginSession:
     """Kick off background auto-login. Returns the LoginSession immediately
     so the UI can start polling /auto-login-status.
@@ -274,6 +295,9 @@ async def start_auto_login(
     `prefer_method` selects the 2FA path when Google offers a picker:
     "auth" = click Authenticator (need_code), "tap" = wait for the
     tap-on-device prompt (need_tap).
+
+    If `totp_secret` is provided and pyotp is installed, 2FA codes are
+    auto-generated instead of waiting for manual input.
     """
     old_task = _tasks.pop(profile, None)
     if old_task and not old_task.done():
@@ -285,6 +309,7 @@ async def start_auto_login(
         state="starting",
         message="Khởi tạo Chrome",
         prefer_method=prefer_method if prefer_method in ("auth", "tap") else "auth",
+        totp_secret=totp_secret,
     )
     _sessions[profile] = session
 
@@ -413,7 +438,7 @@ async def do_google_login_steps(
         await email_input.wait_for(state="visible", timeout=15_000)
         await email_input.fill(session.email)
         await asyncio.sleep(0.8)
-        await _safe_click(page, '#identifierNext button', 'button[jsname="LgbsSe"]:visible')
+        await _safe_click(page, '#identifierNext button', 'span[jsname="V67aGc"]', 'button[jsname="LgbsSe"]:visible')
     except Exception as exc:
         session.state = "failed"
         session.error = f"Không tìm thấy ô email: {exc}"
@@ -430,7 +455,7 @@ async def do_google_login_steps(
         await asyncio.sleep(0.8)
         await pwd_input.fill(password)
         await asyncio.sleep(0.6)
-        await _safe_click(page, '#passwordNext button', 'button[jsname="LgbsSe"]:visible')
+        await _safe_click(page, '#passwordNext button', 'span[jsname="V67aGc"]', 'button[jsname="LgbsSe"]:visible')
     except Exception as exc:
         session.state = "failed"
         session.error = f"Không điền được mật khẩu (Google có thể đã chặn): {exc}"
@@ -486,32 +511,56 @@ async def do_google_login_steps(
 
         if state == "need_code":
             session.state = "need_code"
-            session.message = "Cần mã 2FA — nhập vào ô bên dưới"
-            code_deadline = time.time() + 180
-            while time.time() < code_deadline and not session.pending_code:
-                await asyncio.sleep(0.5)
-            if not session.pending_code:
-                session.state = "failed"
-                session.error = "Không nhận được mã 2FA trong 3 phút"
-                session.completed_at = time.time()
-                return False
-            code = session.pending_code
-            session.pending_code = None
+            if session.totp_secret and _HAS_PYOTP:
+                secret = session.totp_secret.replace(' ', '')
+                code = pyotp.TOTP(secret).now()
+                session.message = "Da tu sinh ma 2FA"
+                logger.info("auto_login: TOTP auto for %s code=%s", session.profile, code)
+                await asyncio.sleep(1.0)
+            else:
+                session.message = "Can ma 2FA"
+                code_deadline = time.time() + 180
+                while time.time() < code_deadline and not session.pending_code:
+                    await asyncio.sleep(0.5)
+                if not session.pending_code:
+                    session.state = "failed"
+                    session.error = "Khong nhan duoc ma 2FA trong 3 phut"
+                    session.completed_at = time.time()
+                    return False
+                code = session.pending_code
+                session.pending_code = None
+            # Fill code with fill() for reliability on input[type=tel]
+            filled = False
             for sel in _2FA_CODE_SELECTORS:
                 try:
-                    await page.locator(sel).first.fill(code, timeout=2000)
-                    break
+                    loc = page.locator(sel).first
+                    if await loc.count() > 0:
+                        await loc.click(timeout=2000)
+                        await loc.fill('')
+                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                        await loc.fill(code)
+                        try:
+                            actual = await loc.input_value()
+                            logger.info("auto_login: typed=%s actual=%s via selector=%s", code, actual, sel)
+                        except Exception:
+                            logger.info("auto_login: filled 2FA code via selector=%s", sel)
+                        filled = True
+                        break
                 except Exception:
                     continue
+            if not filled:
+                logger.warning("auto_login: could not fill 2FA code with any selector")
             await asyncio.sleep(0.5)
             await _safe_click(
                 page,
                 'button:has-text("Next")', 'button:has-text("Tiếp theo")',
+                'span[jsname="V67aGc"]',
                 '#totpNext button', '#submit',
                 'button[jsname="LgbsSe"]:visible',
             )
             session.state = "running"
             session.message = "Đã gửi mã, đang xác minh..."
+            await asyncio.sleep(5.0)
             continue
 
     session.state = "failed"

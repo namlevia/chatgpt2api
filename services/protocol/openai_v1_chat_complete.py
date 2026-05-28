@@ -266,6 +266,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         tools_with_mcp = _inject_mcp_tools(
             tools, skip_ha_search=ha_context_injected,
             is_vision=is_vision_request, search_injected=search_injected,
+            user_text=_extract_last_user_text(messages_copy),
         )
 
         for route in routes:
@@ -324,6 +325,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     tools = _inject_mcp_tools(
         tools, skip_ha_search=ha_context_injected,
         is_vision=is_vision_request, search_injected=search_injected,
+        user_text=_extract_last_user_text(messages),
     )
 
     result = _dispatch(route, messages, tools, tool_choice, body)
@@ -983,6 +985,10 @@ def _handle_chatgpt_chat(
                 or "rate_limit" in err_msg
                 or "too many requests" in err_msg
             )
+            is_payload_too_large = (
+                "413" in err_msg
+                or "payload too large" in err_msg
+            )
             is_expired = (
                 "token_expired" in err_msg
                 or "token expired" in err_msg
@@ -1001,6 +1007,16 @@ def _handle_chatgpt_chat(
                     "preferred_type": preferred_type,
                 })
                 excluded_tokens.add(token)
+                continue
+            if is_payload_too_large:
+                logger.info({
+                    "event": "chatgpt_account_rotate",
+                    "reason": "payload_too_large",
+                    "attempt": attempt,
+                    "preferred_type": preferred_type,
+                })
+                excluded_tokens.add(token)
+                last_quota_error = exc
                 continue
             if not is_quota:
                 raise
@@ -1154,6 +1170,70 @@ _FORCE_TOOL_KEYWORDS = [
     "tầng", "cầu thang", "garage", "cổng",
     "thiết bị", "toàn bộ", "tất cả", "thời tiết",
 ]
+
+# Greetings and trivial chat patterns that never need MCP tools.
+# Matching is prefix-based: if the user message starts with one of these
+# (after stripping), it's considered a trivial chat and MCP tools are skipped.
+_TRIVIAL_GREETINGS = [
+    "xin chào", "chào", "hello", "hi ", "hi.", "hi\n", "hey", "ê ", "alo", "a lô",
+    "good morning", "good afternoon", "good evening",
+    "cảm ơn", "thanks", "thank you",
+    "tạm biệt", "bye", "goodbye",
+    "có đó không", "khỏe không", "ăn cơm chưa",
+    "ok", "okay", "được rồi", "ừ ", "ờ ",
+]
+
+# Tool-relevant domain keywords — if any of these appear in the user text,
+# the query is NOT trivial and needs MCP tools.
+_TOOL_DOMAIN_KEYWORDS = [
+    "thời tiết", "nhiệt độ", "mưa", "nắng", "bão", "gió", "áp suất", "độ ẩm",
+    "tìm", "kiếm", "search", "tra cứu", "wikipedia", "định nghĩa",
+    "chứng khoán", "cổ phiếu", "giá vàng", "tỷ giá", "ngoại tệ", "xăng dầu",
+    "tin tức", "báo ", "tin mới", "bản tin",
+    "arxiv", "nghiên cứu", "paper", "bài báo",
+    "luật ", "nghị định", "thông tư",
+    "bệnh", "thuốc", "triệu chứng", "y tế", "bác sĩ",
+    "học ", "giáo dục", "bài tập", "giảng", "trường",
+    "youtube", "video", "transcript",
+    "dịch", "translate", "phiên âm",
+    "lịch âm", "âm lịch", "ngày", "tết",
+    "phạt nguội", "biển số",
+]
+
+
+def _is_trivial_chat(user_text: str) -> bool:
+    """Return True if this is a simple greeting/chat that doesn't need MCP tools."""
+    if not user_text:
+        return False
+    text = user_text.strip()
+    text_lower = text.lower()
+    # Must be reasonably short to be trivial
+    if len(text) > 80:
+        return False
+    # Must not contain tool-relevant keywords (weather, search, stocks, etc.)
+    for kw in _TOOL_DOMAIN_KEYWORDS:
+        if kw in text_lower:
+            return False
+    # Must not contain HA device keywords
+    for kw in _FORCE_TOOL_KEYWORDS:
+        if kw in text_lower:
+            return False
+    # Must start with a known greeting pattern OR be very short (< 15 chars)
+    for g in _TRIVIAL_GREETINGS:
+        if text_lower.startswith(g):
+            return True
+    if len(text) <= 12:
+        return True
+    return False
+
+
+def _extract_last_user_text(messages: list[dict[str, Any]]) -> str:
+    """Extract the text content of the last user message."""
+    for m in reversed(messages or []):
+        if m.get("role") == "user":
+            c = m.get("content", "")
+            return c if isinstance(c, str) else ""
+    return ""
 
 
 def _prefetch_ha_context_if_needed(
@@ -2177,6 +2257,7 @@ def _inject_mcp_tools(
     skip_ha_search: bool = False,
     is_vision: bool = False,
     search_injected: bool = False,
+    user_text: str = "",
 ) -> list[dict[str, Any]] | None:
     """Inject tools from enabled MCP servers + HA into the tools list.
 
@@ -2199,6 +2280,9 @@ def _inject_mcp_tools(
             The LLM's only job left is to summarize — adding 60+ more MCP
             tools just bloats the prompt and tempts the LLM into a second
             search round-trip. Skip injection.
+        user_text: The last user message text. When provided and clearly a
+            trivial greeting/chat (no tool-relevant keywords), MCP tools are
+            skipped to keep the payload under ChatGPT's per-account size limit.
     """
     logger.info({"event": "mcp_inject_start", "input_tools": len(tools or [])})
     try:
@@ -2221,6 +2305,12 @@ def _inject_mcp_tools(
         if skip_ha_search:
             mcp_tools = []
             logger.info({"event": "mcp_inject_skipped", "reason": "ha_context_injected"})
+        elif not tools and _is_trivial_chat(user_text):
+            # Trivial greeting/chat with no explicit tools requested — skip
+            # all 43 MCP tools. The payload would exceed ChatGPT's per-account
+            # size limit and cause 413 errors. Keep HA tools for smart home.
+            mcp_tools = []
+            logger.info({"event": "mcp_inject_skipped", "reason": "trivial_chat"})
         else:
             mcp_tools = get_enabled_mcp_tools()
             logger.info({"event": "mcp_inject_got_tools", "count": len(mcp_tools)})

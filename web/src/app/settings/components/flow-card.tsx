@@ -1,12 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { LoaderCircle, Plus, Save, Trash2, ExternalLink, Sparkles, KeyRound, RotateCw, Smartphone, X } from "lucide-react";
+import { LoaderCircle, Plus, Save, Trash2, ExternalLink, Sparkles, KeyRound, RotateCw, Smartphone, X, Shield, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
+import { SavedAccountsSelect } from "@/components/saved-accounts-select";
+import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
 
 type FlowAccount = {
   profile: string;
@@ -75,7 +77,7 @@ export function FlowCard() {
   const [cfg, setCfg] = useState<FlowConfig>({
     enabled: true,
     captcha_solver_url: "http://172.16.10.38:8010",
-    captcha_solver_api_key: "AnhNhi@0610",
+    captcha_solver_api_key: "",
     accounts: [],
     cooldown_seconds: 3600,
   });
@@ -88,13 +90,33 @@ export function FlowCard() {
   const [manuallyEditedLabel, setManuallyEditedLabel] = useState(false);
 
   // Auto-login state
-  const [autoLogin, setAutoLogin] = useState<{ email: string; password: string; code: string }>({
+  const [autoLogin, setAutoLogin] = useState<{ email: string; password: string; code: string; totpSecret: string }>({
     email: "",
     password: "",
     code: "",
+    totpSecret: "",
   });
+  const [selectedAccount, setSelectedAccount] = useState("");
   const [loginSession, setLoginSession] = useState<AutoLoginState | null>(null);
+  const [totpCode, setTotpCode] = useState("");
+  const [totpRemaining, setTotpRemaining] = useState(30);
   const pollIntervalRef = useRef<number | null>(null);
+  const totpTimerRef = useRef<number | null>(null);
+  const [showPassword, setShowPassword] = useState(true);
+
+  // Auto-refresh TOTP code
+  useEffect(() => {
+    if (!autoLogin.totpSecret.trim()) { setTotpCode(""); return; }
+    const refresh = async () => {
+      try {
+        setTotpCode(await generateTotpCode(autoLogin.totpSecret));
+        setTotpRemaining(totpSecondsRemaining());
+      } catch { setTotpCode(""); }
+    };
+    void refresh();
+    totpTimerRef.current = window.setInterval(refresh, 5000);
+    return () => { if (totpTimerRef.current) window.clearInterval(totpTimerRef.current); };
+  }, [autoLogin.totpSecret]);
 
   useEffect(() => { fetchCfg(); }, []);
 
@@ -276,6 +298,7 @@ export function FlowCard() {
           profile,
           email: autoLogin.email.trim(),
           password: autoLogin.password,
+          totp_secret: autoLogin.totpSecret.trim(),
         }),
       });
       if (!loginRes.ok) throw new Error(`auto-login HTTP ${loginRes.status}`);
@@ -316,7 +339,8 @@ export function FlowCard() {
           setOneClickStep(`Hoàn tất ✅ Account #${next.accounts.length} (${label}) đã sẵn sàng`);
           toast.success(`Đã thêm account ${label} — profile ${profile}`);
           // Clear email/password
-          setAutoLogin({ email: "", password: "", code: "" });
+          setAutoLogin({ email: "", password: "", code: "", totpSecret: "" });
+          setSelectedAccount("");
         } catch (e: any) {
           setOneClickStep("");
           toast.error(`Lỗi sau login: ${e?.message}`);
@@ -353,6 +377,7 @@ export function FlowCard() {
           profile,
           email: autoLogin.email.trim(),
           password: autoLogin.password,
+          totp_secret: autoLogin.totpSecret.trim(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -402,7 +427,8 @@ export function FlowCard() {
   function cancelLoginSession() {
     stopPolling();
     setLoginSession(null);
-    setAutoLogin({ email: "", password: "", code: "" });
+    setAutoLogin({ email: "", password: "", code: "", totpSecret: "" });
+    setSelectedAccount("");
   }
 
   return (
@@ -626,6 +652,16 @@ export function FlowCard() {
             Login Google + tự lấy/tạo Flow project + tự add vào pool — chỉ cần email + mật khẩu.
             Khi gặp 2FA, dùng panel xanh chàm bên dưới để xử lý (số tap hoặc mã SMS).
           </p>
+          <SavedAccountsSelect
+            csUrl={cfg.captcha_solver_url}
+            csApiKey={cfg.captcha_solver_api_key}
+            selected={selectedAccount}
+            onSelect={(email, acct) => {
+              setSelectedAccount(email);
+              setAutoLogin({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
+            }}
+            disabled={oneClickRunning}
+          />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
               <label className="text-[11px] text-stone-500">Email Google</label>
@@ -640,16 +676,48 @@ export function FlowCard() {
             </div>
             <div>
               <label className="text-[11px] text-stone-500">Mật khẩu</label>
-              <Input
-                type="password"
-                value={autoLogin.password}
-                onChange={(e) => setAutoLogin({ ...autoLogin, password: e.target.value })}
-                placeholder="••••••••"
-                className="mt-1 h-8 rounded-lg border-fuchsia-200 text-xs font-mono"
-                autoComplete="off"
-                disabled={oneClickRunning}
-              />
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={autoLogin.password}
+                  onChange={(e) => setAutoLogin({ ...autoLogin, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="mt-1 h-8 rounded-lg border-fuchsia-200 text-xs font-mono pr-8"
+                  autoComplete="off"
+                  disabled={oneClickRunning}
+                />
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                </button>
+              </div>
             </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-stone-500 flex items-center gap-1">
+              <Shield className="size-3" /> TOTP Secret
+            </label>
+            <Input
+              value={autoLogin.totpSecret}
+              onChange={(e) => setAutoLogin({ ...autoLogin, totpSecret: e.target.value })}
+              placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
+              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
+              autoComplete="off"
+              disabled={oneClickRunning}
+            />
+            {totpCode && (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-[11px] text-amber-700">Mã hiện tại:</span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-sm font-bold tracking-widest">
+                  {totpCode}
+                </span>
+                <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
+              </div>
+            )}
           </div>
           <Button
             className="w-full h-9 rounded-lg bg-gradient-to-r from-fuchsia-600 to-cyan-600 px-3 text-xs font-bold text-white hover:from-fuchsia-700 hover:to-cyan-700 shadow-lg shadow-fuchsia-200"
@@ -681,6 +749,16 @@ export function FlowCard() {
             Backend Playwright tự điền email + mật khẩu, dừng lại khi gặp 2FA để bạn nhập mã hoặc bấm xác minh trên điện thoại.
             Nếu Google chặn (anti-bot), Chrome vẫn ở noVNC — bạn login thủ công nốt.
           </p>
+          <SavedAccountsSelect
+            csUrl={cfg.captcha_solver_url}
+            csApiKey={cfg.captcha_solver_api_key}
+            selected={selectedAccount}
+            onSelect={(email, acct) => {
+              setSelectedAccount(email);
+              setAutoLogin({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
+            }}
+            disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
+          />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
               <label className="text-[11px] text-stone-500">Email Google</label>
@@ -694,15 +772,47 @@ export function FlowCard() {
             </div>
             <div>
               <label className="text-[11px] text-stone-500">Mật khẩu</label>
-              <Input
-                type="password"
-                value={autoLogin.password}
-                onChange={(e) => setAutoLogin({ ...autoLogin, password: e.target.value })}
-                placeholder="••••••••"
-                className="mt-1 h-8 rounded-lg border-stone-200 text-xs font-mono"
-                autoComplete="off"
-              />
+              <div className="relative">
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={autoLogin.password}
+                  onChange={(e) => setAutoLogin({ ...autoLogin, password: e.target.value })}
+                  placeholder="••••••••"
+                  className="mt-1 h-8 rounded-lg border-stone-200 text-xs font-mono pr-8"
+                  autoComplete="off"
+                />
+                <button
+                  type="button"
+                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
+                  onClick={() => setShowPassword(!showPassword)}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
+                </button>
+              </div>
             </div>
+          </div>
+          <div>
+            <label className="text-[11px] text-stone-500 flex items-center gap-1">
+              <Shield className="size-3" /> TOTP Secret
+            </label>
+            <Input
+              value={autoLogin.totpSecret}
+              onChange={(e) => setAutoLogin({ ...autoLogin, totpSecret: e.target.value })}
+              placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
+              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
+              autoComplete="off"
+              disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
+            />
+            {totpCode && (
+              <div className="mt-1 flex items-center gap-2">
+                <span className="text-[11px] text-amber-700">Mã hiện tại:</span>
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-sm font-bold tracking-widest">
+                  {totpCode}
+                </span>
+                <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
