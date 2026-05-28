@@ -218,6 +218,7 @@ class MultiOnboardReq(BaseModel):
     profile: str = "google-multi"
     email: str
     password: str
+    totp_secret: str = ""
     # Same as AutoLoginReq.prefer_method but applied across all services.
     prefer_method: str = "auth"
     # Subset of {"gemini_web", "flow"}. Order matters — we
@@ -634,6 +635,7 @@ async def _run_multi(req: MultiOnboardReq) -> None:
             email=req.email,
             password=req.password,
             prefer_method=req.prefer_method,
+            totp_secret=req.totp_secret,
         )
         deadline = time.time() + 360
         while time.time() < deadline:
@@ -663,6 +665,7 @@ async def _run_multi(req: MultiOnboardReq) -> None:
                 if svc == "gemini_web":
                     s = await start_gemini_web_login(
                         profile=req.profile, email=req.email, password=req.password,
+                        totp_secret=req.totp_secret,
                     )
                 elif svc == "flow":
                     # Flow login = Google session + open labs.google. The
@@ -734,6 +737,8 @@ async def api_multi_onboard(req: MultiOnboardReq) -> dict[str, Any]:
         "services": list(req.services),
     })
     _asyncio.create_task(_run_multi(req))
+    try: save_account(req.email, req.password, req.totp_secret, "")
+    except Exception: pass
     return {
         "profile": req.profile,
         "stage": state["stage"],

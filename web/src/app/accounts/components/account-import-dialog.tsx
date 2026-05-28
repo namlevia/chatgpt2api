@@ -28,6 +28,8 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
+import { SavedAccountsSelect } from "@/components/saved-accounts-select";
+import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
 import { createAccounts, createOAuthAccounts, type Account } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
@@ -135,6 +137,25 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     apiKey: "",
   });
   const multiPollRef = useRef<number | null>(null);
+  const totpTimerRef = useRef<number | null>(null);
+  const [selectedAccount, setSelectedAccount] = useState("");
+  const [multiTotpCode, setMultiTotpCode] = useState("");
+  const [multiTotpRemaining, setMultiTotpRemaining] = useState(30);
+  const [multiTotpSecret, setMultiTotpSecret] = useState("");
+
+  // Auto-refresh TOTP code when totpSecret is set
+  useEffect(() => {
+    if (!multiTotpSecret.trim()) { setMultiTotpCode(""); return; }
+    const refresh = async () => {
+      try {
+        setMultiTotpCode(await generateTotpCode(multiTotpSecret));
+        setMultiTotpRemaining(totpSecondsRemaining());
+      } catch { setMultiTotpCode(""); }
+    };
+    void refresh();
+    totpTimerRef.current = window.setInterval(refresh, 5000);
+    return () => { if (totpTimerRef.current) window.clearInterval(totpTimerRef.current); };
+  }, [multiTotpSecret]);
 
   // Pick up the captcha-solver URL + API key from providers.flow (the
   // existing onboard cards already store them there). Falls back to
@@ -154,6 +175,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
     })();
     return () => {
       if (multiPollRef.current) window.clearInterval(multiPollRef.current);
+      if (totpTimerRef.current) window.clearInterval(totpTimerRef.current);
     };
   }, []);
 
@@ -620,6 +642,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               email: multiDraft.email.trim(),
               password: multiDraft.password,
               prefer_method: preferMethod,
+              totp_secret: multiTotpSecret,
               services: ["gemini_web", "flow", "chatgpt"],
             }),
           });
@@ -737,22 +760,63 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
             </p>
           </div>
 
-          <div className="grid gap-3">
-            <Input
-              type="email"
-              placeholder="email Google"
-              value={multiDraft.email}
-              onChange={(e) => setMultiDraft({ ...multiDraft, email: e.target.value })}
-              disabled={multiRunning}
-            />
-            <Input
-              type="password"
-              placeholder="mật khẩu Google"
-              value={multiDraft.password}
-              onChange={(e) => setMultiDraft({ ...multiDraft, password: e.target.value })}
-              disabled={multiRunning}
-            />
-            {isAuth && (
+          <SavedAccountsSelect
+            csUrl={csCfg.url}
+            csApiKey={csCfg.apiKey}
+            selected={selectedAccount}
+            onSelect={(email, acct) => {
+              setSelectedAccount(email);
+              setMultiDraft({ email: acct.email, password: acct.password, code: "" });
+              setMultiTotpSecret(acct.totp_secret || "");
+            }}
+            disabled={multiRunning}
+          />
+          {selectedAccount ? (
+            <div className="rounded-lg border border-indigo-200 bg-white/80 px-3 py-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 min-w-0">
+                  <KeyRound className="size-3.5 shrink-0 text-indigo-500" />
+                  <span className="text-xs font-medium text-indigo-900 truncate">{multiDraft.email}</span>
+                  {multiTotpCode && (
+                    <>
+                      <span className="text-[10px] text-indigo-400">|</span>
+                      <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-xs font-bold tracking-widest">{multiTotpCode}</span>
+                      <span className="text-[10px] text-amber-500">({multiTotpRemaining}s)</span>
+                    </>
+                  )}
+                </div>
+                <button
+                  className="shrink-0 text-stone-400 hover:text-stone-600 p-0.5"
+                  onClick={() => {
+                    setSelectedAccount("");
+                    setMultiDraft({ email: "", password: "", code: "" });
+                    setMultiTotpSecret("");
+                  }}
+                  title="Bỏ chọn"
+                >
+                  <ArrowLeft className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="grid gap-3">
+              <Input
+                type="email"
+                placeholder="email Google"
+                value={multiDraft.email}
+                onChange={(e) => setMultiDraft({ ...multiDraft, email: e.target.value })}
+                disabled={multiRunning}
+              />
+              <Input
+                type="password"
+                placeholder="mật khẩu Google"
+                value={multiDraft.password}
+                onChange={(e) => setMultiDraft({ ...multiDraft, password: e.target.value })}
+                disabled={multiRunning}
+              />
+            </div>
+          )}
+          {isAuth && (
               <div className={cn(
                 "rounded-xl border-2 p-3 transition",
                 multiNeedCode
