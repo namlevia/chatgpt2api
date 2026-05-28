@@ -59,7 +59,7 @@ def submit_2fa_code(profile: str, code: str) -> bool:
     return True
 
 
-async def start_gemini_web_login(profile: str, email: str, password: str) -> GeminiWebLoginSession:
+async def start_gemini_web_login(profile: str, email: str, password: str, totp_secret: str = "") -> GeminiWebLoginSession:
     """Kick off background Gemini Web login.
 
     If the profile already has a valid Google session (from Flow or
@@ -75,6 +75,7 @@ async def start_gemini_web_login(profile: str, email: str, password: str) -> Gem
         email=email,
         state="starting",
         message="Khởi tạo Chrome",
+        totp_secret=totp_secret,
     )
     _sessions[profile] = session
 

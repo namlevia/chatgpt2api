@@ -166,6 +166,7 @@ class AutoLoginReq(BaseModel):
     profile: str = "google-fx"
     email: str
     password: str
+    totp_secret: str = ""
     # "auth" → click Authenticator on the 2FA picker (state advances to
     # need_code). "tap" → skip the picker so Google falls through to the
     # tap-on-device prompt (state advances to need_tap).
@@ -197,6 +198,7 @@ class GeminiWebOnboardReq(BaseModel):
     profile: str = "gemini-web-default"
     email: str
     password: str
+    totp_secret: str = ""
 
 
 class GeminiWebChatReq(BaseModel):
@@ -541,7 +543,11 @@ async def api_auto_login(req: AutoLoginReq) -> dict[str, Any]:
         email=req.email,
         password=req.password,
         prefer_method=req.prefer_method,
+        totp_secret=req.totp_secret,
     )
+    # Auto-save credentials to shared accounts DB
+    try: save_account(req.email, req.password, req.totp_secret, "")
+    except Exception: pass
     return {
         **session.to_dict(),
         "novnc": settings.novnc_external_url,
@@ -838,7 +844,11 @@ async def api_gemini_web_onboard(req: GeminiWebOnboardReq) -> dict[str, Any]:
     """
     session = await start_gemini_web_login(
         profile=req.profile, email=req.email, password=req.password,
+        totp_secret=req.totp_secret,
     )
+    # Auto-save credentials to shared accounts DB
+    try: save_account(req.email, req.password, req.totp_secret, "")
+    except Exception: pass
     return {
         **session.to_dict(),
         "novnc": settings.novnc_external_url,
@@ -1004,6 +1014,9 @@ async def api_chatgpt_onboard(req: ChatGPTOnboardReq) -> dict[str, Any]:
         password=req.password,
         totp_secret=req.totp_secret,
     )
+    # Auto-save credentials to shared accounts DB
+    try: save_account(req.email, req.password, req.totp_secret, "")
+    except Exception: pass
     return {
         **session.to_dict(),
         "note": "Poll /v1/chatgpt/{profile}/onboard-status. "
