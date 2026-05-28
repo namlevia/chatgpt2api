@@ -848,7 +848,6 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                 </div>
               </div>
             )}
-          </div>
 
           {multiRunning && (
             <div className="rounded-xl bg-stone-100 p-3 text-sm text-stone-700">
