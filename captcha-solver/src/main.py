@@ -92,9 +92,50 @@ def require_api_key(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="invalid api key")
 
 
+async def _auto_warmup() -> None:
+    """Warm up browser profiles for all saved accounts on startup.
+
+    Pre-opens Gemini Web + Flow tabs so the first request for each
+    profile hits an already-ready browser (saves 3-5s cold start).
+    """
+    try:
+        await asyncio.sleep(2.0)  # let pool fully settle
+        accounts = list_accounts()
+        profiles: set[str] = set()
+
+        for acct in accounts:
+            email = acct.get("email", "")
+            if email and "@" in email:
+                localpart = email.split("@")[0]
+                profiles.add(f"gemini-web-{localpart}")
+                profiles.add(f"google-{localpart}")
+
+        if not profiles:
+            profiles = {"gemini-web-default", "google-fx"}
+
+        logger.info("auto-warmup: warming %d profiles: %s", len(profiles), sorted(profiles))
+
+        for profile in sorted(profiles):
+            try:
+                if profile.startswith("gemini-web-"):
+                    url = "https://gemini.google.com/app"
+                else:
+                    url = "https://labs.google/fx/vi/tools/flow"
+
+                async with pool.page(profile=profile, headless=False) as page:
+                    if not page.url.startswith(url):
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+                logger.info("auto-warmup: warmed %s", profile)
+            except Exception as exc:
+                logger.warning("auto-warmup: failed %s: %s", profile, exc)
+    except Exception as exc:
+        logger.warning("auto-warmup: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await pool.start()
+    asyncio.create_task(_auto_warmup())
     yield
     await pool.stop()
 
@@ -759,7 +800,7 @@ async def api_session_warmup(profile: str, provider: str = "gemini_web") -> dict
     try:
         url_map = {
             "gemini_web": "https://gemini.google.com/app",
-            "flow": "https://aistudio.google.com/"
+            "flow": "https://labs.google/fx/vi/tools/flow"
         }
         target_url = url_map.get(provider, "")
         

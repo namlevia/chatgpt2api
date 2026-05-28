@@ -89,7 +89,6 @@ _AUTHENTICATOR_OPTION_SELECTORS = (
     'div[role="link"]:has-text("Google Authenticator")',
     'div[role="link"]:has-text("authenticator")',
     'li:has-text("Google Authenticator")',
-    'li:has-text("Nhận mã xác minh")',
     'li:has-text("ứng dụng xác thực")',
     'div:has-text("Google Authenticator"):not(:has(div))',
 )
