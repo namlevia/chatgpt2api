@@ -142,6 +142,8 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   const [multiTotpCode, setMultiTotpCode] = useState("");
   const [multiTotpRemaining, setMultiTotpRemaining] = useState(30);
   const [multiTotpSecret, setMultiTotpSecret] = useState("");
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [savedRefreshKey, setSavedRefreshKey] = useState(0);
 
   // Auto-refresh TOTP code when totpSecret is set
   useEffect(() => {
@@ -741,6 +743,28 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
           toast.error(`Submit code fail: ${e?.message || e}`);
         }
       };
+      const handleSaveAccount = async () => {
+        if (!multiDraft.email.trim() || !multiDraft.password) {
+          toast.error("Cần email + mật khẩu để lưu");
+          return;
+        }
+        setIsSavingAccount(true);
+        try {
+          await fetch(`${csCfg.url}/v1/accounts/saved`, {
+            method: "POST",
+            headers: { "Authorization": `Bearer ${csCfg.apiKey}`, "Content-Type": "application/json" },
+            body: JSON.stringify({ email: multiDraft.email.trim(), password: multiDraft.password, totp_secret: multiTotpSecret }),
+          });
+          toast.success("Đã lưu tài khoản");
+          setMultiDraft({ email: "", password: "", code: "" });
+          setMultiTotpSecret("");
+          setSavedRefreshKey((k) => k + 1);
+        } catch {
+          toast.error("Lưu tài khoản thất bại");
+        } finally {
+          setIsSavingAccount(false);
+        }
+      };
       return (
         <div className="space-y-4">
           <button type="button" onClick={() => { stopMultiPoll(); setMethod("menu"); }}
@@ -770,6 +794,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               setMultiTotpSecret(acct.totp_secret || "");
             }}
             disabled={multiRunning}
+            refreshKey={savedRefreshKey}
           />
           {selectedAccount ? (
             <div className="rounded-lg border border-indigo-200 bg-white/80 px-3 py-2.5">
@@ -814,6 +839,17 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
                 onChange={(e) => setMultiDraft({ ...multiDraft, password: e.target.value })}
                 disabled={multiRunning}
               />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 rounded-lg text-[11px]"
+                onClick={handleSaveAccount}
+                disabled={isSavingAccount || !multiDraft.email.trim() || !multiDraft.password}
+              >
+                {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+                Lưu tài khoản
+              </Button>
             </div>
           )}
           {isAuth && (

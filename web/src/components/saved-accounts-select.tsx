@@ -18,6 +18,7 @@ type Props = {
   selected: string;
   onSelect: (email: string, account: { email: string; password: string; totp_secret: string }) => void;
   disabled?: boolean;
+  refreshKey?: number;
 };
 
 const STORAGE_KEY = "chatgpt2api_saved_accounts_cache";
@@ -30,12 +31,12 @@ function loadCached(): SavedAccount[] {
   try { return JSON.parse(localStorage.getItem(STORAGE_KEY) || "[]"); } catch { return []; }
 }
 
-export function SavedAccountsSelect({ csUrl, csApiKey, selected, onSelect, disabled }: Props) {
+export function SavedAccountsSelect({ csUrl, csApiKey, selected, onSelect, disabled, refreshKey }: Props) {
   const [accounts, setAccounts] = useState<SavedAccount[]>(loadCached());
 
   useEffect(() => {
     void fetchAccounts();
-  }, [csUrl]);
+  }, [csUrl, refreshKey]);
 
   async function fetchAccounts() {
     try {
