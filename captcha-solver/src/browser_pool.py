@@ -121,8 +121,9 @@ class BrowserPool:
         self._evict_task: asyncio.Task | None = None
 
     async def start(self) -> None:
-        if _CLOAK_AVAILABLE:
-            # CloakBrowser doesn't need a playwright runtime — it manages its own binary
+        browser = settings.browser.lower()
+        if _CLOAK_AVAILABLE and browser != "firefox":
+            # CloakBrowser is Chromium-only — skip if Firefox is preferred
             if self._evict_task is None:
                 self._evict_task = asyncio.create_task(self._eviction_loop())
             logger.info("cloakbrowser ready (stealth mode, Cloudflare bypass enabled)")
@@ -131,7 +132,7 @@ class BrowserPool:
             from patchright.async_api import async_playwright
             self._playwright = await async_playwright().start()
             self._evict_task = asyncio.create_task(self._eviction_loop())
-            logger.info("playwright started (fallback mode)")
+            logger.info("patchright started (engine=%s)", browser)
 
     async def stop(self) -> None:
         if self._evict_task:
@@ -246,15 +247,17 @@ class BrowserPool:
 
     async def _open_context(self, profile: str, headless: bool) -> tuple[BrowserContext, Any]:
         user_data_dir = self._profile_dir(profile)
-        self._clear_singleton_locks(profile)
-        self._clear_crash_flag(profile)  # Prevent "Restore pages?" dialog
+        browser = settings.browser.lower()
+        if browser != "firefox":
+            self._clear_singleton_locks(profile)
+            self._clear_crash_flag(profile)  # Chromium/Chrome-specific
         env = None
         if not headless:
             env = {"DISPLAY": settings.display}
         
-        if _CLOAK_AVAILABLE:
+        browser = settings.browser.lower()
+        if _CLOAK_AVAILABLE and browser != "firefox":
             # CloakBrowser: source-level Chromium patches, passes Cloudflare Turnstile automatically
-            # Set DISPLAY before launch (env= param not supported by cloakbrowser API)
             if env:
                 import os as _os
                 for k, v in env.items():
@@ -266,10 +269,9 @@ class BrowserPool:
                 locale="vi-VN",
                 timezone="Asia/Ho_Chi_Minh",
                 user_agent=_USER_AGENT,
-                # backend='patchright' suppresses CDP signals → better Turnstile score
                 backend='patchright',
-                humanize=True,  # human-like mouse/keyboard behavior → passes 24/24 behavioral signals
-                human_preset='careful',  # extra-careful preset for max stealth
+                humanize=True,
+                human_preset='careful',
                 args=[
                     "--no-first-run",
                     "--disable-session-crashed-bubble",
@@ -279,8 +281,23 @@ class BrowserPool:
                 ],
             )
             await context.add_init_script(_STEALTH_INIT_SCRIPT)
+        elif browser == "firefox":
+            # Firefox: no Google Safe Browsing → bypasses "unsafe browser" error
+            # Google trusts Firefox sign-in more than automated Chromium on VPS IPs.
+            assert self._playwright is not None
+            context = await self._playwright.firefox.launch_persistent_context(
+                user_data_dir=str(user_data_dir),
+                headless=headless,
+                viewport=_DEFAULT_VIEWPORT,
+                locale="vi-VN",
+                timezone_id="Asia/Ho_Chi_Minh",
+                user_agent=_USER_AGENT,
+                env=env,
+                ignore_default_args=["--enable-automation"],
+            )
+            await context.add_init_script(_STEALTH_INIT_SCRIPT)
         else:
-            # Fallback to patchright (bundled Chromium with stealth patches)
+            # Patchright Chromium with stealth patches
             assert self._playwright is not None
             context = await self._playwright.chromium.launch_persistent_context(
                 user_data_dir=str(user_data_dir),
@@ -302,11 +319,16 @@ class BrowserPool:
                 ignore_default_args=["--enable-automation"],
             )
             await context.add_init_script(_STEALTH_INIT_SCRIPT)
-        
+
         self._attach_close_handler(profile, context)
         pages = context.pages
         page = pages[0] if pages else await context.new_page()
-        mode = "cloakbrowser" if _CLOAK_AVAILABLE else "patchright"
+        if browser == "firefox":
+            mode = "patchright-firefox"
+        elif _CLOAK_AVAILABLE:
+            mode = "cloakbrowser"
+        else:
+            mode = "patchright-chromium"
         logger.info("opened context profile=%s headless=%s engine=%s", profile, headless, mode)
         return context, page
 

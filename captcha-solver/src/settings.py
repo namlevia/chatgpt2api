@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     display: str = ":99"
     # Where the noVNC websocket is exposed for the manual-login UX.
     novnc_external_url: str = "http://localhost:6080"
+    # Browser engine: "chromium" (default) or "firefox" (bypasses Google
+    # Safe Browsing "unsafe browser" detection on VPS IPs).
+    browser: str = "firefox"
 
 
 settings = Settings()

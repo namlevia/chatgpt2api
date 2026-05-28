@@ -35,9 +35,10 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install -r requirements.txt
 
-# Patchright still bundles a Chromium copy as fallback. Keep both.
+# Install browsers: patchright Chromium (stealth) + Firefox (bypasses
+# Google Safe Browsing "unsafe browser" block on VPS IPs).
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-RUN patchright install chromium
+RUN patchright install chromium && patchright install firefox
 
 COPY src /app/src
 COPY supervisord.conf /etc/supervisor/conf.d/captcha-solver.conf
