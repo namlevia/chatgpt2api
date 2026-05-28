@@ -425,6 +425,18 @@ class ConfigStore:
         data["ai_review"] = self.ai_review
         data["global_system_prompt"] = self.global_system_prompt
         data["backup"] = self.get_backup_settings()
+        # Auto-fill captcha-solver config from env vars so frontend always has them
+        cs_url = os.getenv("CAPTCHA_SOLVER_URL", "").strip()
+        cs_api_key = os.getenv("CAPTCHA_SOLVER_API_KEY", "").strip()
+        if cs_url or cs_api_key:
+            providers = dict(data.get("providers") or {})
+            flow = dict(providers.get("flow") or {})
+            if cs_url and not flow.get("captcha_solver_url"):
+                flow["captcha_solver_url"] = cs_url
+            if cs_api_key and not flow.get("captcha_solver_api_key"):
+                flow["captcha_solver_api_key"] = cs_api_key
+            providers["flow"] = flow
+            data["providers"] = providers
         data.pop("auth-key", None)
         return data
 
