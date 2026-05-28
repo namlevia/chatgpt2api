@@ -45,6 +45,8 @@ export function ChatGPTOnboardCard() {
   const totpTimerRef = useRef<number | null>(null);
   const [selectedAccount, setSelectedAccount] = useState("");
   const [showPassword, setShowPassword] = useState(true);
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [savedRefreshKey, setSavedRefreshKey] = useState(0);
 
   // ── Auto-refresh state ──
   const [autoRefreshRunning, setAutoRefreshRunning] = useState(false);
@@ -278,6 +280,29 @@ export function ChatGPTOnboardCard() {
     setDraft({ email: "", password: "", code: "", totpSecret: "" });
   }
 
+  async function handleSaveAccount() {
+    if (!draft.email.trim() || !draft.password) {
+      toast.error("Cần email + mật khẩu để lưu");
+      return;
+    }
+    setIsSavingAccount(true);
+    try {
+      await fetch(`${cs.url}/v1/accounts/saved`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: draft.email.trim(), password: draft.password, totp_secret: draft.totpSecret.trim() }),
+      });
+      toast.success("Đã lưu tài khoản");
+      setDraft({ email: "", password: "", code: "", totpSecret: "" });
+      setSelectedAccount("");
+      setSavedRefreshKey((k) => k + 1);
+    } catch {
+      toast.error("Lưu tài khoản thất bại");
+    } finally {
+      setIsSavingAccount(false);
+    }
+  }
+
   function openNoVNC() {
     const noVncUrl = cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1";
     window.open(noVncUrl, "_blank");
@@ -321,6 +346,7 @@ export function ChatGPTOnboardCard() {
               setDraft({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
             }}
             disabled={running}
+            refreshKey={savedRefreshKey}
           />
 
           <div className="grid gap-2 sm:grid-cols-2">
@@ -381,6 +407,17 @@ export function ChatGPTOnboardCard() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg text-[11px]"
+              onClick={handleSaveAccount}
+              disabled={isSavingAccount || !draft.email.trim() || !draft.password}
+            >
+              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+              Lưu tài khoản
+            </Button>
             <Button
               className="h-9 rounded-lg bg-gradient-to-r from-blue-600 to-cyan-600 px-3 text-xs font-bold text-white hover:from-blue-700 hover:to-cyan-700 shadow-lg shadow-blue-200"
               onClick={onboardAndAddToPool}

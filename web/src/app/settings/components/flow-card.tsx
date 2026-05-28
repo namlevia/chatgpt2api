@@ -97,6 +97,8 @@ export function FlowCard() {
     totpSecret: "",
   });
   const [selectedAccount, setSelectedAccount] = useState("");
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [savedRefreshKey, setSavedRefreshKey] = useState(0);
   const [loginSession, setLoginSession] = useState<AutoLoginState | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [totpRemaining, setTotpRemaining] = useState(30);
@@ -431,6 +433,29 @@ export function FlowCard() {
     setSelectedAccount("");
   }
 
+  async function handleSaveAccount() {
+    if (!autoLogin.email.trim() || !autoLogin.password) {
+      toast.error("Cần email + mật khẩu để lưu");
+      return;
+    }
+    setIsSavingAccount(true);
+    try {
+      await fetch(`${cfg.captcha_solver_url}/v1/accounts/saved`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cfg.captcha_solver_api_key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: autoLogin.email.trim(), password: autoLogin.password, totp_secret: autoLogin.totpSecret.trim() }),
+      });
+      toast.success("Đã lưu tài khoản");
+      setAutoLogin({ email: "", password: "", code: "", totpSecret: "" });
+      setSelectedAccount("");
+      setSavedRefreshKey((k) => k + 1);
+    } catch {
+      toast.error("Lưu tài khoản thất bại");
+    } finally {
+      setIsSavingAccount(false);
+    }
+  }
+
   return (
     <Card className="rounded-3xl border-emerald-100/80 bg-emerald-50/30">
       <CardContent className="space-y-4 p-5">
@@ -661,6 +686,7 @@ export function FlowCard() {
               setAutoLogin({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
             }}
             disabled={oneClickRunning}
+            refreshKey={savedRefreshKey}
           />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
@@ -719,6 +745,19 @@ export function FlowCard() {
               </div>
             )}
           </div>
+          <div className="flex gap-2">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg text-[11px]"
+              onClick={handleSaveAccount}
+              disabled={isSavingAccount || !autoLogin.email.trim() || !autoLogin.password}
+            >
+              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+              Lưu tài khoản
+            </Button>
+          </div>
           <Button
             className="w-full h-9 rounded-lg bg-gradient-to-r from-fuchsia-600 to-cyan-600 px-3 text-xs font-bold text-white hover:from-fuchsia-700 hover:to-cyan-700 shadow-lg shadow-fuchsia-200"
             onClick={oneClickAddAccount}
@@ -758,6 +797,7 @@ export function FlowCard() {
               setAutoLogin({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
             }}
             disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
+            refreshKey={savedRefreshKey}
           />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
@@ -813,6 +853,19 @@ export function FlowCard() {
                 <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
               </div>
             )}
+          </div>
+          <div className="flex gap-2 pt-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg text-[11px]"
+              onClick={handleSaveAccount}
+              disabled={isSavingAccount || !autoLogin.email.trim() || !autoLogin.password}
+            >
+              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+              Lưu tài khoản
+            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button

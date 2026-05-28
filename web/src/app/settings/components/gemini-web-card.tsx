@@ -29,6 +29,8 @@ export function GeminiWebCard() {
   const [timeout, setTimeoutVal] = useState(120);
   const [draft, setDraft] = useState({ email: "", password: "", totpSecret: "" });
   const [selectedAccount, setSelectedAccount] = useState("");
+  const [isSavingAccount, setIsSavingAccount] = useState(false);
+  const [savedRefreshKey, setSavedRefreshKey] = useState(0);
   const [running, setRunning] = useState(false);
   const [session, setSession] = useState<OnboardState | null>(null);
   const [savingCfg, setSavingCfg] = useState(false);
@@ -157,6 +159,29 @@ export function GeminiWebCard() {
     window.open(cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1", "_blank");
   }
 
+  async function handleSaveAccount() {
+    if (!draft.email.trim() || !draft.password) {
+      toast.error("Cần email + mật khẩu để lưu");
+      return;
+    }
+    setIsSavingAccount(true);
+    try {
+      await fetch(`${cs.url}/v1/accounts/saved`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: draft.email.trim(), password: draft.password, totp_secret: draft.totpSecret.trim() }),
+      });
+      toast.success("Đã lưu tài khoản");
+      setDraft({ email: "", password: "", totpSecret: "" });
+      setSelectedAccount("");
+      setSavedRefreshKey((k) => k + 1);
+    } catch {
+      toast.error("Lưu tài khoản thất bại");
+    } finally {
+      setIsSavingAccount(false);
+    }
+  }
+
   function cancelSession() {
     stopPolling();
     setSession(null);
@@ -228,6 +253,7 @@ export function GeminiWebCard() {
               setDraft({ email: acct.email, password: acct.password, totpSecret: acct.totp_secret || "" });
             }}
             disabled={running}
+            refreshKey={savedRefreshKey}
           />
           <div className="grid gap-2 sm:grid-cols-2">
             <div>
@@ -272,6 +298,17 @@ export function GeminiWebCard() {
             )}
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg text-[11px]"
+              onClick={handleSaveAccount}
+              disabled={isSavingAccount || !draft.email.trim() || !draft.password}
+            >
+              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+              Lưu tài khoản
+            </Button>
             <Button
               className="h-9 rounded-lg bg-gradient-to-r from-violet-600 to-fuchsia-600 px-3 text-xs font-bold text-white hover:from-violet-700 hover:to-fuchsia-700 shadow-lg shadow-violet-200"
               onClick={onboard} disabled={running}
