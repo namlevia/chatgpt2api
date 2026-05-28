@@ -8,7 +8,9 @@ ENV DEBIAN_FRONTEND=noninteractive \
     DISPLAY=:99 \
     CAPTCHA_SOLVER_DATA_DIR=/data \
     CAPTCHA_SOLVER_DISPLAY=:99 \
-    CAPTCHA_SOLVER_NOVNC_EXTERNAL_URL=http://localhost:6080/vnc.html?host=localhost&port=6080&autoconnect=1
+    CAPTCHA_SOLVER_NOVNC_EXTERNAL_URL=http://localhost:6080/vnc.html?host=localhost&port=6080&autoconnect=1 \
+    MOZ_DISABLE_CONTENT_SANDBOX=1 \
+    MOZ_DISABLE_GMP_SANDBOX=1
 
 # System deps: chromium runtime libs + Xvfb + x11vnc + websockify (noVNC)
 RUN apt-get update && apt-get install -y --no-install-recommends \

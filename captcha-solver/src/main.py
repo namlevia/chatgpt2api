@@ -1250,6 +1250,7 @@ async def _auto_refresh_loop(interval_minutes: int = 30):
 
                 # Scrape failed — full re-login
                 try:
+                    from .accounts_db import get_account as db_get_account
                     full = db_get_account(email)
                     if not full:
                         continue

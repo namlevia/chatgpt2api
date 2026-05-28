@@ -97,6 +97,8 @@ Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
 # Chrome single-instance lock files that linger after a crash and block
 # the next launch with "Profile is already in use".
 _CHROME_LOCK_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
+# Firefox profile lock files that persist after crash/kill
+_FIREFOX_LOCK_FILES = ("lock", ".parentlock", "parent.lock")
 
 
 @dataclass
@@ -181,14 +183,14 @@ class BrowserPool:
         return path
 
     def _clear_singleton_locks(self, profile: str) -> None:
-        """Remove Chrome lock files left by a previous crash."""
+        """Remove lock files left by a previous crash (Chrome + Firefox)."""
         root = self._profile_dir(profile)
-        for name in _CHROME_LOCK_FILES:
+        for name in _CHROME_LOCK_FILES + _FIREFOX_LOCK_FILES:
             try:
                 p = root / name
                 if p.exists() or p.is_symlink():
                     p.unlink()
-                    logger.info("cleared stale chrome lock profile=%s file=%s", profile, name)
+                    logger.info("cleared stale lock profile=%s file=%s", profile, name)
             except Exception as exc:
                 logger.debug("could not unlink %s: %s", name, exc)
 
@@ -248,8 +250,8 @@ class BrowserPool:
     async def _open_context(self, profile: str, headless: bool) -> tuple[BrowserContext, Any]:
         user_data_dir = self._profile_dir(profile)
         browser = settings.browser.lower()
+        self._clear_singleton_locks(profile)
         if browser != "firefox":
-            self._clear_singleton_locks(profile)
             self._clear_crash_flag(profile)  # Chromium/Chrome-specific
         env = None
         if not headless:
