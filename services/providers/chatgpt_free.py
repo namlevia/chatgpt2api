@@ -22,11 +22,7 @@ from __future__ import annotations
 
 from typing import Any, Iterator
 
-from services.account_service import (
-    account_service,
-    detect_token_audience,
-    _TOKEN_AUDIENCE_OPENAI_API,
-)
+from services.account_service import account_service
 from services.config import config
 from utils.log import logger
 
@@ -192,12 +188,14 @@ def _try_free_with_token(
     )
 
     # Build a backend bound to OUR rotation-selected token so text_backend()
-    # doesn't re-pick a burnt account. JWTs issued for api.openai.com can't be
-    # used as Bearer on chatgpt.com — fall back to the anonymous session
-    # backend in that case.
-    if token and detect_token_audience(token) == _TOKEN_AUDIENCE_OPENAI_API:
-        backend = OpenAIBackendAPI()  # anonymous — JWT rejected by chatgpt.com
-    elif token:
+    # doesn't re-pick a burnt account. A ChatGPT web accessToken (scraped from
+    # /api/auth/session) carries aud=api.openai.com but IS the correct Bearer
+    # for chatgpt.com/backend-api — so we always use the token here. The old
+    # "api.openai.com → go anonymous" guard only made sense when the free pool
+    # could contain raw OpenAI-API (standard/sk-) tokens; those are now group
+    # "openai" and never reach this path (account_group split), so dropping the
+    # token to anonymous just broke every free request.
+    if token:
         backend = OpenAIBackendAPI(access_token=token)
     else:
         backend = text_backend()
