@@ -266,6 +266,9 @@ async def analyze_image(
 ) -> dict[str, Any]:
     """Upload an image to chatgpt.com and ask a question about it.
 
+    Uses JS-based interactions to bypass CloakBrowser stability checks
+    (same strategy as the chat() function).
+
     Args:
         image: either a `data:image/<mime>;base64,<...>` data URL or an
                https URL to an image.
@@ -291,119 +294,170 @@ async def analyze_image(
             await _wait_for_ready(page, timeout=30)
             stages['page_ready'] = True
 
-            # 3. Upload image via file chooser.
-            #    chatgpt.com has a "+" button (aria-label="Thêm tệp và nhiều tính năng khác")
-            #    Clicking it opens a popover with "Tải ảnh/tệp lên" which triggers the
-            #    native file dialog.
+            # 3. Upload image — use direct file input (most reliable with CloakBrowser).
+            #    Avoid clicking the "+" popover menu which triggers CloakBrowser
+            #    stability checks on animating elements.
+            upload_ok = False
             try:
-                # Open the + menu
-                add_btn = page.locator(
-                    'button[aria-label*="Thêm tệp"], '
-                    'button[aria-label*="Attach"], '
-                    'button[aria-label*="Add file"]'
-                ).first
-                await add_btn.click(timeout=5_000)
-                await asyncio.sleep(0.5)
-            except Exception as exc:
-                logger.warning('chatgpt_web: could not click + button: %s', str(exc)[:120])
-                stages['attach_btn_error'] = str(exc)[:120]
-
-            # 4. Use expect_file_chooser to intercept the native file dialog
-            try:
-                async with page.expect_file_chooser(timeout=10_000) as fc_info:
-                    # Click "Upload file/image" option in the popover
-                    upload_opt = page.locator(
-                        'button:has-text("Tải ảnh"), '
-                        'button:has-text("Tải tệp"), '
-                        'button:has-text("Upload"), '
-                        'div[role="menuitem"]:has-text("file"), '
-                        'div[role="menuitem"]:has-text("Upload"), '
-                        'div[role="menuitem"]:has-text("ảnh"), '
-                        'div[role="menuitem"]:has-text("tệp")'
-                    ).first
-                    if await upload_opt.count() > 0:
-                        await upload_opt.click(timeout=3_000)
-                    else:
-                        # Fallback: click the hidden file input directly
-                        file_input = page.locator('input[type="file"][accept*="image"]').first
-                        await file_input.set_input_files(tmp_path)
-                        stages['upload_method'] = 'direct_input'
-                        # Skip file_chooser flow
-                        raise Exception('used direct input')
-                file_chooser = await fc_info.value
-                await file_chooser.set_files(tmp_path)
-                stages['upload_method'] = 'file_chooser'
-                logger.info('chatgpt_web: uploaded image %s (mime=%s) via file chooser',
+                file_input = page.locator('input[type="file"]').first
+                await file_input.set_input_files(tmp_path)
+                upload_ok = True
+                stages['upload_method'] = 'direct_input'
+                logger.info('chatgpt_web: uploaded image %s (mime=%s) via direct input',
                             tmp_path, mime)
             except Exception as exc:
-                msg = str(exc)[:120]
-                if 'used direct input' in msg:
-                    pass  # Already handled above
-                elif 'file_chooser' not in stages:
-                    # File chooser didn't open — try direct file input as fallback
-                    logger.warning('chatgpt_web: file_chooser failed (%s), trying direct input', msg)
-                    try:
-                        file_input = page.locator('input[type="file"][accept*="image"]').first
-                        await file_input.set_input_files(tmp_path)
-                        stages['upload_method'] = 'direct_input_fallback'
-                    except Exception as exc2:
-                        logger.error('chatgpt_web: direct input also failed: %s', str(exc2)[:120])
-                        stages['upload_error'] = str(exc2)[:120]
+                logger.warning('chatgpt_web: direct file input failed: %s', str(exc)[:120])
+                # Fallback: try clicking + button via JS, then file chooser
+                try:
+                    await page.evaluate("""
+                        () => {
+                            const btn = document.querySelector(
+                                'button[aria-label*="Thêm"], button[aria-label*="Attach"], '
+                                'button[aria-label*="Add file"]'
+                            );
+                            if (btn) btn.click();
+                        }
+                    """)
+                    await asyncio.sleep(0.5)
+                    async with page.expect_file_chooser(timeout=8_000) as fc_info:
+                        await page.evaluate("""
+                            () => {
+                                const el = document.querySelector(
+                                    'div[role="menuitem"]:has-text("ảnh"), '
+                                    + 'div[role="menuitem"]:has-text("tệp"), '
+                                    + 'div[role="menuitem"]:has-text("file"), '
+                                    + 'div[role="menuitem"]:has-text("Upload"), '
+                                    + 'button:has-text("Tải ảnh"), '
+                                    + 'button:has-text("Upload")'
+                                );
+                                if (el) el.click();
+                            }
+                        """)
+                    file_chooser = await fc_info.value
+                    await file_chooser.set_files(tmp_path)
+                    upload_ok = True
+                    stages['upload_method'] = 'file_chooser_fallback'
+                except Exception as exc2:
+                    logger.error('chatgpt_web: all upload methods failed: %s', str(exc2)[:120])
+                    stages['upload_error'] = str(exc2)[:120]
 
-            # 5. Wait for image to process (upload + thumbnail appears)
-            await asyncio.sleep(3.0)
-            stages['image_uploaded'] = True
+            # 4. Wait for image to process (upload + thumbnail appears)
+            if upload_ok:
+                await asyncio.sleep(4.0)
+                stages['image_uploaded'] = True
 
-            # 6. Type the prompt
-            try:
-                editor = page.locator(
-                    '#prompt-textarea, '
-                    '[data-testid=chat-input], '
-                    'div[contenteditable=true]'
-                ).first
-                await editor.wait_for(state='visible', timeout=10_000)
-                await editor.click()
-                await asyncio.sleep(0.3)
-                await editor.fill(prompt)
-                await asyncio.sleep(0.5)
-                stages['prompt_typed'] = True
-            except Exception as exc:
-                logger.warning('chatgpt_web vision: type prompt failed: %s', str(exc)[:120])
-                stages['prompt_error'] = str(exc)[:120]
+            # 5. Type prompt and send via JS (same as chat() function)
+            sent = False
+            if upload_ok:
+                try:
+                    sent = await page.evaluate("""
+                        async (promptText) => {
+                            const editor = document.querySelector(
+                                '#prompt-textarea, [data-testid=chat-input], '
+                                + 'div[contenteditable=true]'
+                            );
+                            if (!editor) return false;
 
-            # 7. Click send
-            try:
-                send_btn = page.locator(
-                    'button[data-testid=send-button], '
-                    'button[aria-label*="Gửi"], '
-                    'button[aria-label*="Send"], '
-                    'button:has(svg)'
-                ).first
-                await send_btn.click(timeout=5_000)
-                stages['send_clicked'] = True
-            except Exception as exc:
-                logger.warning('chatgpt_web vision: send click failed: %s', str(exc)[:120])
-                stages['send_error'] = str(exc)[:120]
+                            editor.focus();
+                            if (editor.getAttribute('contenteditable') === 'true' || editor.isContentEditable) {
+                                editor.innerText = promptText;
+                                editor.dispatchEvent(new InputEvent('input', {
+                                    bubbles: true, inputType: 'insertText', data: promptText
+                                }));
+                            } else {
+                                editor.value = promptText;
+                                editor.dispatchEvent(new Event('input', {bubbles: true}));
+                            }
+                            await new Promise(r => setTimeout(r, 500));
 
-            # 8. Wait for assistant response
-            remaining = timeout - (time.time() - started)
-            wait_secs = max(10, min(remaining, 120))
-            await asyncio.sleep(wait_secs)
+                            let btn = document.querySelector('button[data-testid="send-button"]');
+                            if (!btn) {
+                                btn = document.querySelector(
+                                    'button[aria-label*="Send"], button[aria-label*="Gửi"], '
+                                    + 'button[aria-label*="submit"]'
+                                );
+                            }
+                            if (!btn) {
+                                const allBtns = document.querySelectorAll('button');
+                                for (const b of allBtns) {
+                                    const hasSvg = b.querySelector('svg');
+                                    const text = (b.innerText || '').trim();
+                                    const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                                    if (hasSvg && !text && (
+                                        aria.includes('send') || aria.includes('gửi') || aria.includes('submit')
+                                    )) {
+                                        btn = b;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!btn) return false;
+                            btn.click();
+                            return true;
+                        }
+                    """, prompt)
+                    stages['send'] = 'js_ok' if sent else 'js_no_button'
+                except Exception as exc:
+                    logger.warning('chatgpt_web vision: JS type/send failed: %s', str(exc)[:120])
+                    stages['send_error'] = str(exc)[:120]
 
-            # 9. Extract response text
+            if not sent and upload_ok:
+                # Fallback: Playwright approach
+                try:
+                    editor = page.locator(
+                        '#prompt-textarea, [data-testid=chat-input], div[contenteditable=true]'
+                    ).first
+                    await editor.click()
+                    await asyncio.sleep(0.3)
+                    await editor.fill(prompt)
+                    await asyncio.sleep(0.3)
+                    send_btn = page.locator('button[data-testid="send-button"]').first
+                    if await send_btn.count() > 0:
+                        await send_btn.evaluate('el => el.click()')
+                    else:
+                        await page.keyboard.press('Enter')
+                    sent = True
+                    stages['send'] = 'playwright_fallback'
+                except Exception as exc2:
+                    stages['send_fallback_error'] = str(exc2)[:120]
+
+            if not sent:
+                stages['send'] = 'failed'
+
+            # 6. Poll for assistant response
             reply_text = ''
-            try:
-                reply_el = page.locator('[data-message-author-role=assistant]').last
-                if await reply_el.count() > 0:
-                    reply_text = await reply_el.inner_text()
-            except Exception:
-                pass
+            if sent:
+                deadline = time.time() + min(timeout, 120)
+                while time.time() < deadline:
+                    await asyncio.sleep(2)
+                    try:
+                        reply_el = page.locator('[data-message-author-role=assistant]').last
+                        if await reply_el.count() > 0:
+                            text = await reply_el.inner_text()
+                            if text and text != reply_text:
+                                reply_text = text
+                    except Exception:
+                        pass
+                    try:
+                        stop_btn = page.locator(
+                            'button[data-testid="stop-button"], '
+                            'button[aria-label*="Stop"], '
+                            'button[aria-label*="Dừng"]'
+                        ).first
+                        if await stop_btn.count() > 0:
+                            continue
+                        if reply_text:
+                            break
+                    except Exception:
+                        pass
+            else:
+                # Even without send, wait and try to extract
+                await asyncio.sleep(10)
 
+            # 7. Fallback extraction if no reply found
             if not reply_text:
-                # Try broader selectors
                 try:
                     body_text = await page.locator('body').inner_text()
-                    # Look for error messages
                     if 'Unable to' in body_text or 'unable to' in body_text:
                         reply_text = f'[ChatGPT could not process: {body_text[:300]}]'
                     else:
@@ -412,6 +466,10 @@ async def analyze_image(
                     pass
 
             elapsed_ms = int((time.time() - started) * 1000)
+            logger.info(
+                'chatgpt_web analyze_image: sent=%s reply_len=%d elapsed=%dms stages=%s',
+                sent, len(reply_text), elapsed_ms, json.dumps(stages)
+            )
             return {
                 'profile': profile,
                 'prompt': prompt,
@@ -420,7 +478,6 @@ async def analyze_image(
                 'stages': stages,
             }
     finally:
-        # Clean up temp file
         try:
             os.unlink(tmp_path)
         except Exception:

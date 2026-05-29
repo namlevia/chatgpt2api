@@ -993,11 +993,12 @@ def _handle_chatgpt_chat(
                 "token_expired" in err_msg
                 or "token expired" in err_msg
                 or "expired" in err_msg
-                or "could not parse" in err_msg
+            ) and "401" in err_msg
+            is_auth_error = (
+                "could not parse" in err_msg
                 or "authentication token" in err_msg
             ) and "401" in err_msg
             if is_expired:
-                # Mark expired account disabled so pool skips it.
                 try:
                     account_service.update_account(token, {"status": "disabled"})
                 except Exception:
@@ -1005,6 +1006,18 @@ def _handle_chatgpt_chat(
                 logger.info({
                     "event": "chatgpt_account_rotate",
                     "reason": "token_expired",
+                    "attempt": attempt,
+                    "preferred_type": preferred_type,
+                })
+                excluded_tokens.add(token)
+                continue
+            if is_auth_error:
+                # JWT sent to wrong endpoint, stale session cookie, etc.
+                # Rotate but don't permanently disable — session may be
+                # refreshable via browser pool.
+                logger.info({
+                    "event": "chatgpt_account_rotate",
+                    "reason": "auth_error",
                     "attempt": attempt,
                     "preferred_type": preferred_type,
                 })
