@@ -776,8 +776,8 @@ def _dispatch(route, messages, tools, tool_choice, body):
     # File upload bypass runs independently of RTK — when enabled for chatgpt
     # provider, large user messages (>80KB) are uploaded to /backend-api/files
     # and referenced via asset_pointer instead of being head+tail compressed.
-    file_upload_enabled = (route.provider == "chatgpt")
-    if route.provider == "chatgpt":
+    file_upload_enabled = (route.provider in ("chatgpt", "chatgpt_free"))
+    if route.provider in ("chatgpt", "chatgpt_free"):
         rtk_on = config.rtk_enabled
         rtk_threshold = 100_000
     else:
@@ -805,45 +805,22 @@ def _dispatch(route, messages, tools, tool_choice, body):
         return handle_gemini_web_chat(route.model, messages, body.get("stream"), body)
     elif route.provider.startswith("custom:"):
         return _handle_custom_openai_chat(route.provider, route.model, messages, tools, tool_choice, body.get("stream"), body)
-    elif route.provider == "chatgpt":
-        # Vision: chatgpt.com backend uploads image_url/input_image blocks via
-        # /backend-api/files (estuary) and references them as asset_pointer.
-        # Requires an authenticated chatgpt account (free or codex JWT). If
-        # the pool is empty/anon, fall back to gemini_free which accepts
-        # inline base64 directly.
-        if _messages_have_images(messages):
-            try:
-                from services.account_service import account_service
-                has_chatgpt = any(
-                    a.get("status") == "active"
-                    and str(a.get("type") or "").split(",")
-                    and any(t in ("free", "codex") for t in str(a.get("type") or "").split(","))
-                    for a in account_service.list_accounts()
-                )
-            except Exception:
-                has_chatgpt = False
-            if not has_chatgpt:
-                logger.info({"event": "vision_fallback_to_gemini",
-                             "reason": "no_active_chatgpt_account"})
-                return _handle_gemini_chat("auto", messages, body.get("stream"), body)
-        # chatgpt.com native backend does NOT support role="tool" messages.
-        # Convert tool results to user messages so re-dispatch after agentic
-        # tool execution doesn't get 400 Bad Request.
-        normalized = []
-        for m in messages:
-            if m.get("role") == "tool":
-                tool_name = m.get("name", "UnknownTool")
-                normalized.append({
-                    "role": "user",
-                    "content": f"[KẾT QUẢ TỪ HỆ THỐNG - TOOL {tool_name}]:\n{m.get('content', '')}",
-                })
-            else:
-                normalized.append(m)
-        messages = normalized
-        return _handle_chatgpt_chat(route.model, messages, tools, tool_choice, body.get("stream"), body, route)
+    elif route.provider in ("chatgpt_free", "chatgpt"):
+        # Standalone free-tier module. `chatgpt/` and bare/unprefixed models are
+        # now aliases for free — handle_free_chat owns the whole free path
+        # (vision-fallback to gemini, tool→user normalization, free-pool
+        # rotation). Codex/paid traffic uses cx/ | codex/ | paid/; OpenAI-API
+        # (sk-/standard) uses oai/.
+        from services.providers.chatgpt_free import handle_free_chat
+        return handle_free_chat(route.model, messages, tools, tool_choice, body.get("stream"), body, route)
+    elif route.provider == "openai_api":
+        # 3rd path kept separate (đại ca's decision): raw OpenAI API key (sk-)
+        # or `standard` JWT accounts → api.openai.com via custom:openai.
+        return _handle_openai_api_chat(route.model, messages, tools, tool_choice, body.get("stream"), body)
     else:
-        logger.warning({"event": "unknown_provider", "provider": route.provider, "fallback": "chatgpt"})
-        return _handle_chatgpt_chat(route.model, messages, tools, tool_choice, body.get("stream"), body)
+        logger.warning({"event": "unknown_provider", "provider": route.provider, "fallback": "chatgpt_free"})
+        from services.providers.chatgpt_free import handle_free_chat
+        return handle_free_chat(route.model, messages, tools, tool_choice, body.get("stream"), body, route)
 
 
 def _restore_tool_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -945,260 +922,39 @@ def _ensure_openai_provider():
         logger.info({"event": "openai_provider_auto_created"})
 
 
-def _handle_chatgpt_chat(
+def _handle_openai_api_chat(
     model: str,
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None,
     tool_choice: Any,
     stream: bool,
     body: dict[str, Any],
-    route=None,
 ) -> dict[str, Any] | Iterator[dict[str, Any]]:
-    """ChatGPT flow — auto-detects token type and routes to correct API.
+    """OpenAI-API path (3rd group, kept fully separate from free & codex).
 
-    Optional model prefix to force a specific account type:
-      chatgpt/free/<model>   → pick from ChatGPT free accounts only
-      chatgpt/codex/<model>  → pick from Codex (OAuth) accounts only
-      chatgpt/<model>        → auto (whichever active account comes first)
+    Serves raw OpenAI API-key (sk-...) or `standard`/`openai` JWT accounts by
+    calling api.openai.com through the custom:openai provider. Reached only via
+    the explicit `oai/` prefix — never auto-detected inside the free path.
     """
-    from services.account_service import detect_token_audience, _TOKEN_AUDIENCE_OPENAI_API, _TOKEN_AUDIENCE_CHATGPT
+    openai_model = model[4:] if model.startswith("oai/") else model
+    if not openai_model or openai_model in ("auto", "chatgpt/auto"):
+        openai_model = config.openai_default_model or "gpt-4o"
+    if openai_model.startswith("chatgpt/"):
+        openai_model = openai_model[len("chatgpt/"):]
 
-    # Parse optional type-override prefix from model string.
-    # Note: `chatgpt/auto` and bare `chatgpt/<slug>` now hard-pin to the
-    # free pool. The previous default — scanning every active account
-    # regardless of type, with codex tokens served first if they were
-    # added first — let HA AI Task accidentally burn paid Codex quota
-    # on routine vision/chat requests. Codex traffic must go through
-    # `cx/auto` (or `chatgpt/codex/<slug>`) explicitly.
-    preferred_type: str | None = "free"
-    if model.startswith("chatgpt/free/"):
-        preferred_type = "free"
-        model = "chatgpt/" + model[len("chatgpt/free/"):]
-    elif model.startswith("chatgpt/codex/"):
-        preferred_type = "codex"
-        model = "chatgpt/" + model[len("chatgpt/codex/"):]
+    token = account_service.get_text_access_token(account_type="openai")
+    if not token:
+        raise RuntimeError("no usable OpenAI-API (sk-/standard) account")
 
-    # Retry loop: when an account 429/quota-burns, rotate to the next active
-    # account in the SAME pool (preserve preferred_type). Without this we'd
-    # 502 even though 7+ other healthy tokens sit in the pool. Errors that
-    # aren't quota-related re-raise immediately so we don't mask real bugs.
-    excluded_tokens: set[str] = set()
-    last_quota_error: Exception | None = None
-    for attempt in range(8):
-        token = account_service.get_text_access_token(
-            excluded_tokens=excluded_tokens, account_type=preferred_type
-        )
-        if not token:
-            break
-        try:
-            return _try_chatgpt_with_token(
-                token, model, messages, tools, tool_choice, body, preferred_type, route, stream
-            )
-        except RuntimeError as exc:
-            err_msg = str(exc).lower()
-            is_quota = (
-                "429" in err_msg
-                or "usage_limit" in err_msg
-                or ("quota" in err_msg and "exceeded" in err_msg)
-                or "rate limit" in err_msg
-                or "rate_limit" in err_msg
-                or "too many requests" in err_msg
-            )
-            is_payload_too_large = (
-                "413" in err_msg
-                or "payload too large" in err_msg
-            )
-            is_expired = (
-                "token_expired" in err_msg
-                or "token expired" in err_msg
-                or "expired" in err_msg
-            ) and "401" in err_msg
-            is_auth_error = (
-                "could not parse" in err_msg
-                or "authentication token" in err_msg
-            ) and "401" in err_msg
-            if is_expired:
-                try:
-                    account_service.update_account(token, {"status": "disabled"})
-                except Exception:
-                    pass
-                logger.info({
-                    "event": "chatgpt_account_rotate",
-                    "reason": "token_expired",
-                    "attempt": attempt,
-                    "preferred_type": preferred_type,
-                })
-                excluded_tokens.add(token)
-                continue
-            if is_auth_error:
-                # JWT sent to wrong endpoint, stale session cookie, etc.
-                # Rotate but don't permanently disable — session may be
-                # refreshable via browser pool.
-                logger.info({
-                    "event": "chatgpt_account_rotate",
-                    "reason": "auth_error",
-                    "attempt": attempt,
-                    "preferred_type": preferred_type,
-                })
-                excluded_tokens.add(token)
-                continue
-            if is_payload_too_large:
-                logger.info({
-                    "event": "chatgpt_account_rotate",
-                    "reason": "payload_too_large",
-                    "attempt": attempt,
-                    "preferred_type": preferred_type,
-                })
-                excluded_tokens.add(token)
-                last_quota_error = exc
-                continue
-            if not is_quota:
-                raise
-            logger.info({
-                "event": "chatgpt_account_rotate",
-                "reason": "quota_burnt",
-                "attempt": attempt,
-                "preferred_type": preferred_type,
-                "remaining_excluded": len(excluded_tokens) + 1,
-            })
-            excluded_tokens.add(token)
-            last_quota_error = exc
-            continue
-    if last_quota_error is not None:
-        raise last_quota_error
-    raise RuntimeError(
-        f"no usable chatgpt account (preferred_type={preferred_type!r})"
+    messages = _restore_tool_messages(messages)
+    messages = _convert_images_for_openai(messages)
+    _ensure_openai_provider()
+
+    logger.info({"event": "openai_api_chat_routed", "model": openai_model})
+    return _handle_custom_openai_chat(
+        "custom:openai", openai_model, messages, tools, tool_choice,
+        stream, body, force_token=token,
     )
-
-
-def _try_chatgpt_with_token(
-    token: str,
-    model: str,
-    messages: list[dict[str, Any]],
-    tools: list[dict[str, Any]] | None,
-    tool_choice: Any,
-    body: dict[str, Any],
-    preferred_type: str | None,
-    route=None,
-    stream: bool = False,
-) -> dict[str, Any] | Iterator[dict[str, Any]]:
-    """Single-attempt body extracted from _handle_chatgpt_chat for the rotate-on-quota loop."""
-    from services.account_service import detect_token_audience, _TOKEN_AUDIENCE_OPENAI_API, _TOKEN_AUDIENCE_CHATGPT
-    is_openai_api = False
-    is_codex = False
-    if token:
-        if token.startswith("sk-"):
-            is_openai_api = True
-        else:
-            acc = account_service.get_account(token)
-            if acc:
-                acc_type = str(acc.get("type") or "").split(",")
-                if "codex" in acc_type:
-                    is_codex = True
-                elif ("standard" in acc_type or "openai" in acc_type) or (
-                    detect_token_audience(token) == _TOKEN_AUDIENCE_OPENAI_API
-                    and "free" not in acc_type
-                    and "antigravity" not in acc_type
-                ):
-                    is_openai_api = True
-
-    if is_codex:
-        logger.info({"event": "chatgpt_codex_routed", "token_type": "codex"})
-        import services.providers.openai_oauth as openai_oauth
-        # Strip "chatgpt/" prefix — Codex doesn't know our routing-prefix
-        # convention. "chatgpt/auto" → "auto" (Codex resolves auto from
-        # its own model_settings.openai_oauth list).
-        codex_model = model
-        if codex_model.startswith("chatgpt/"):
-            codex_model = codex_model[len("chatgpt/"):]
-        # Map OpenAI public model names → 'auto'. Codex API rejects
-        # 'gpt-4o', 'gpt-4-turbo', etc with "model not supported when
-        # using Codex with a ChatGPT account". Common entry point for
-        # HA ai_task / n8n / OpenAI SDK clients that don't know about
-        # our codex/* aliases. 'auto' lets Codex pick from its enabled
-        # models in config.model_settings.openai_oauth.
-        _UNSUPPORTED_PREFIXES = ("gpt-3.5", "gpt-4o", "gpt-4-", "gpt-4.", "gpt-5o", "gpt-5-")
-        if codex_model and any(codex_model.startswith(p) for p in _UNSUPPORTED_PREFIXES):
-            logger.info({"event": "codex_model_mapped", "from": codex_model, "to": "auto"})
-            codex_model = "auto"
-        # Drop keys we pass explicitly so **body doesn't double-bind them
-        # (raises "got multiple values for keyword argument" otherwise).
-        body_extras = {k: v for k, v in body.items()
-                       if k not in {"model", "messages", "stream", "tools", "tool_choice", "access_token"}}
-        # codex_oauth.chat_completions signature: (access_token, messages, model=..., ...)
-        # — access_token is the FIRST positional arg, not auto-fetched.
-        return openai_oauth.codex_oauth.chat_completions(
-            token, messages, model=codex_model, stream=stream, tools=tools, tool_choice=tool_choice, **body_extras
-        )
-
-    if is_openai_api:
-        # OpenAI API — native tools, all architectures
-        logger.info({"event": "chatgpt_openai_api_routed"})
-        default_model = config.openai_default_model or "gpt-4o"
-
-        if model == "auto" or model == "chatgpt/auto":
-            # Pick from enabled chatgpt models, or fall back to default_model
-            ms = config.data.get("model_settings") or {}
-            all_enabled = (ms.get("enabled_models") or {}).get("chatgpt") if isinstance(ms, dict) else None
-            # Filter out auto placeholders, strip chatgpt/ prefix for comparison
-            enabled = []
-            for m in (all_enabled or []):
-                m = m.strip()
-                if m in ("auto", "chatgpt/auto"):
-                    continue
-                if m.startswith("chatgpt/"):
-                    m = m[len("chatgpt/"):]
-                if m:
-                    enabled.append(m)
-            if enabled and default_model not in enabled:
-                openai_model = enabled[0]  # First real enabled model
-            else:
-                openai_model = default_model
-        else:
-            openai_model = model
-        if openai_model.startswith("chatgpt/"):
-            openai_model = openai_model[len("chatgpt/"):]
-
-        messages = _restore_tool_messages(messages)
-        messages = _convert_images_for_openai(messages)
-        _ensure_openai_provider()
-
-        return _handle_custom_openai_chat(
-            "custom:openai", openai_model, messages, tools, tool_choice, stream, body,
-            force_token=token,
-        )
-
-    # chatgpt.com backend (free account — no openai token)
-    # Build a backend bound to OUR rotation-selected token so we don't
-    # accidentally re-pick the same burnt account inside text_backend().
-    # JWT tokens issued for api.openai.com can't be used as Bearer on
-    # chatgpt.com — fall back to anonymous (session-only) backend.
-    from services.openai_backend_api import OpenAIBackendAPI
-    if token and detect_token_audience(token) == _TOKEN_AUDIENCE_OPENAI_API:
-        backend = OpenAIBackendAPI()  # anonymous — JWT rejected by chatgpt.com
-    elif token:
-        backend = OpenAIBackendAPI(access_token=token)
-    else:
-        backend = text_backend()
-    from services.config import _IS_ADDON
-    if _IS_ADDON:
-        # Addon: XML tool call parsing + force hint for HA
-        if stream:
-            gen = _stream_chatgpt_addon(backend, messages, model, tools, tool_choice)
-            return _prefetch_stream(gen, "chatgpt.com addon stream failed — token may be invalid")
-        return _chatgpt_addon_completion(model, messages, tools, tool_choice)
-
-    # Docker + chatgpt.com free: HA only waits for ONE HTTP response, so we
-    # cannot use an agentic loop (2nd LLM call arrives after HA has closed the
-    # connection). Instead: pre-fetch HA context BEFORE calling the LLM, inject
-    # it as a system message, then call the LLM exactly once.
-    messages = _prefetch_ha_context_if_needed(messages, tools, token)
-
-    if stream:
-        gen = stream_text_chat_completion(backend, messages, model, tools, tool_choice)
-        return _prefetch_stream(gen, "chatgpt.com backend stream failed — token may be invalid")
-    request = ConversationRequest(model=model, messages=messages, tools=tools, tool_choice=tool_choice)
-    return completion_response(model, collect_text(backend, request), messages=messages)
 
 # Device keywords that should trigger tool call forcing
 _FORCE_TOOL_KEYWORDS = [
@@ -1911,7 +1667,11 @@ def _handle_openai_oauth_chat(
     """Use Codex OAuth token to call chatgpt.com/backend-api/codex/responses — same as 9router."""
     from services.providers.openai_oauth import codex_oauth
 
-    pure_model = model[3:] if model.startswith("cx/") else model
+    pure_model = model
+    for _p in ("cx/", "codex/", "paid/"):
+        if pure_model.startswith(_p):
+            pure_model = pure_model[len(_p):]
+            break
     if not pure_model or pure_model == "auto":
         pure_model = "auto"
 
@@ -1938,6 +1698,27 @@ def _handle_openai_oauth_chat(
         if token in attempted or usage_limit_hits >= max_account_switches:
             break
         attempted.add(token)
+
+        # A paid account that landed in the codex pool *by plan only* (logged
+        # in via Google → chatgpt.com web JWT, no real Codex token) is tagged
+        # by plan, NOT by a "codex" type. Route it to the shared chatgpt.com
+        # transport instead of the Codex responses API. We key off the account
+        # TYPE tag (not JWT introspection): a real Codex onboard always tags
+        # type="codex"; detect_token_type() is unreliable here because it
+        # returns "google" for codex tokens issued through a Google login
+        # before it ever checks chatgpt_account_id. "phân nhóm theo plan, tự
+        # đổi route". On any lookup failure, default to the Codex path.
+        try:
+            _acc = account_service.get_account(token) or {}
+            _is_real_codex = "codex" in str(_acc.get("type") or "").split(",")
+        except Exception as _exc:
+            logger.warning({"event": "codex_type_lookup_failed", "error": str(_exc)[:120]})
+            _is_real_codex = True
+        if not _is_real_codex:
+            from services.providers.chatgpt_free import call_chatgpt_web
+            logger.info({"event": "codex_webjwt_fallback", "reason": "paid_plan_no_codex_token"})
+            account_service.mark_text_used(token)
+            return call_chatgpt_web(token, pure_model, messages, tools, tool_choice, stream, body)
 
         try:
             if stream:

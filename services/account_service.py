@@ -19,6 +19,51 @@ from utils.log import logger
 _TOKEN_AUDIENCE_CHATGPT = "chatgpt.com"
 _TOKEN_AUDIENCE_OPENAI_API = "api.openai.com"
 
+# Paid ChatGPT plans. Any account whose `plan` (chatgpt_plan_type) is one of
+# these belongs to the PAID/Codex group — NOT the free pool — because the
+# subscription unlocks Codex. Decided 2026-05-29 with đại ca: "acc plus, go,
+# business là 1 vì nó có codex". Note `go` lives here (it used to be wrongly
+# merged into free in api/accounts.py).
+PAID_PLANS = {"plus", "pro", "go", "business", "team", "enterprise"}
+
+# Canonical account groups. There are exactly four logical pools and every
+# account maps to exactly one. Keeping the mapping in ONE place lets the
+# free / codex / openai providers stay fully independent instead of each
+# re-deriving the group from ad-hoc `type.split(",")` checks.
+GROUP_FREE = "free"
+GROUP_CODEX = "codex"
+GROUP_OPENAI = "openai"
+GROUP_ANTIGRAVITY = "antigravity"
+
+
+def account_group(account: dict | None) -> str:
+    """Classify an account into exactly one logical pool.
+
+    Priority order (first match wins):
+      1. antigravity  — Google Cloud companion tokens (type contains it)
+      2. codex        — Codex OAuth token, OR a paid plan (plus/go/business…),
+                        OR an explicit `codex` type tag
+      3. openai       — raw OpenAI API key (sk-…) or `standard`/`openai` type
+      4. free         — everything else (chatgpt.com web JWT, plan=free)
+
+    A paid-plan account that only carries a chatgpt.com web JWT still lands in
+    the `codex` group (route picks transport later) — matches đại ca's
+    "phân nhóm theo plan, tự đổi route" decision.
+    """
+    if not isinstance(account, dict):
+        return GROUP_FREE
+    types = {t.strip() for t in str(account.get("type") or "").split(",") if t.strip()}
+    plan = str(account.get("plan") or "").strip().lower()
+    token = str(account.get("access_token") or "")
+
+    if GROUP_ANTIGRAVITY in types:
+        return GROUP_ANTIGRAVITY
+    if "codex" in types or plan in PAID_PLANS:
+        return GROUP_CODEX
+    if token.startswith("sk-") or "standard" in types or "openai" in types:
+        return GROUP_OPENAI
+    return GROUP_FREE
+
 
 def _decode_jwt_payload(access_token: str) -> dict | None:
     """Best-effort base64url decode of the JWT payload segment. Returns
@@ -157,6 +202,19 @@ class AccountService:
                         normalized["user_id"] = str(payload["sub"])
         normalized["email"] = normalized.get("email") or None
         normalized["user_id"] = normalized.get("user_id") or None
+        # Backfill `plan` from the JWT's chatgpt_plan_type claim at IMPORT time.
+        # Both session-token import and captcha-solver Google login produce a
+        # chatgpt.com web JWT carrying this claim — without decoding it here, a
+        # freshly-imported plus/go/business account would have plan=None and be
+        # misclassified as `free` by account_group() until a /backend-api/me
+        # refresh ran. Decoding now makes the free/codex split correct on day 1.
+        if not normalized.get("plan") and access_token.startswith("eyJ"):
+            _plan_payload = _decode_jwt_payload(access_token)
+            if _plan_payload:
+                _auth = _plan_payload.get("https://api.openai.com/auth") or {}
+                if isinstance(_auth, dict) and isinstance(_auth.get("chatgpt_plan_type"), str):
+                    normalized["plan"] = _auth.get("chatgpt_plan_type") or None
+        normalized["plan"] = normalized.get("plan") or None
         normalized["source_type"] = str(normalized.get("source_type") or "web").strip() or "web"
         limits_progress = normalized.get("limits_progress")
         normalized["limits_progress"] = limits_progress if isinstance(limits_progress, list) else []
@@ -248,16 +306,15 @@ class AccountService:
                 status = account.get("status")
                 if status in {"disabled", "error", "limited"}:
                     continue
-                types = str(account.get("type") or "").split(",")
-                if "antigravity" in types:
+                group = account_group(account)
+                if group == GROUP_ANTIGRAVITY:
                     continue
-                if account_type and account_type not in types:
-                    continue
-                # When requesting free accounts, strictly exclude any account
-                # that also carries a codex token — the "free,codex" hybrid
-                # created by add_accounts_with_type merging leaks Codex quota
-                # into chatgpt/auto traffic (HA ai_task, n8n, voice pipelines).
-                if account_type == "free" and "codex" in types:
+                # Type-filter via the canonical group classifier. "free" now
+                # means group==free (excludes codex tokens AND paid-plan
+                # accounts — plus/go/business carry Codex and must never leak
+                # into chatgpt/auto / HA / n8n free-tier traffic). "codex"
+                # means the paid group (codex token or paid plan).
+                if account_type and group != account_type:
                     continue
                 token = account.get("access_token") or ""
                 if not token or token in excluded:

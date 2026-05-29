@@ -20,9 +20,15 @@ from utils.helper import IMAGE_MODELS
 # Provider prefixes ported from 9router src/shared/constants/providers.js
 PROVIDER_PREFIXES: dict[str, str] = {
     "9r/": "ninerouter",
+    "free/": "chatgpt_free",   # standalone free-tier module (chatgpt.com web)
+    "chatgpt/codex/": "openai_oauth",  # legacy alias — keep BEFORE chatgpt/
+    "chatgpt/free/": "chatgpt_free",   # legacy alias — keep BEFORE chatgpt/
     "chatgpt/": "chatgpt",
+    "paid/": "openai_oauth",   # plus/go/business — unified under Codex OAuth
     "cx/": "openai_oauth",
     "codex/": "openai_oauth",
+    "oai/": "openai_api",      # raw sk- key / standard JWT → api.openai.com
+    "openai_api/": "openai_api",
     "oc/": "opencode",
     "ocg/": "opencode_go",
     "gemini_free/": "gemini_free",
@@ -116,6 +122,7 @@ class BackendRouter:
         "openai_oauth": "gpt-5.3-codex",
         "opencode": "nemotron-3-super-free",
         "chatgpt": "auto",
+        "chatgpt_free": "auto",
         "gemini_free": "gemini-3-flash-preview",
         "openrouter": "openai/gpt-4o",
         "nvidia_nim": "openai/gpt-oss-120b",
@@ -252,7 +259,7 @@ class BackendRouter:
                 )
 
         # Text chat routing
-        if provider == "chatgpt":
+        if provider in ("chatgpt", "chatgpt_free"):
             # If payload is large and we have free providers, suggest fallback
             if payload_size and payload_size > self.FREE_PAYLOAD_LIMIT:
                 # Don't redirect if active accounts exist (OpenAI API handles large payloads)
@@ -268,12 +275,12 @@ class BackendRouter:
                             provider="opencode",
                             model=model if model != "auto" else "auto",
                             no_auth=True,
-                            fallback_providers=["chatgpt"],
+                            fallback_providers=[provider],
                         )
 
             # Use ChatGPT as normal
             return BackendRoute(
-                provider="chatgpt",
+                provider=provider,
                 model=model,
             )
 

@@ -13,7 +13,7 @@ from api.support import (
     sanitize_sub2api_server,
     sanitize_sub2api_servers,
 )
-from services.account_service import account_service
+from services.account_service import account_service, account_group
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
@@ -163,14 +163,13 @@ def create_router() -> APIRouter:
         # ── ChatGPT branch ──
         chatgpt_accounts = [a for a in accounts if str(a.get("type") or "").lower() not in ("", "custom")]
         if chatgpt_accounts:
-            # Group by type — but merge "go" plan into "free" since they're
-            # both consumer chatgpt accounts using the same rotation logic.
-            # The "go" badge stays on each individual account via account.type.
-            def _group_key(t: str) -> str:
-                return "free" if t == "go" else t
+            # Group by canonical pool (account_group): free / codex / openai /
+            # antigravity. Paid plans (plus/go/business…) land in `codex` — `go`
+            # is NOT merged into free (that old behavior leaked paid accounts
+            # into the free-tier view). The plan badge stays on each account.
             type_groups: dict[str, list] = {}
             for acc in chatgpt_accounts:
-                acc_type = _group_key(str(acc.get("type") or "free"))
+                acc_type = account_group(acc)
                 type_groups.setdefault(acc_type, []).append(acc)
             groups = []
             for acc_type, accs in sorted(type_groups.items()):

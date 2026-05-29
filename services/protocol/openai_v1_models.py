@@ -708,16 +708,21 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                         "owned_by": provider_name,
                     })
 
-    # Always add chatgpt/* aliases so HA / SDK dropdowns and combo-model
-    # pickers can see them.
-    #  - chatgpt/auto = free pool only (codex routing uses cx/auto)
-    #  - cx/auto      = ép codex (handled by openai_oauth provider — no dup here)
-    # `chatgpt/free/auto` previously coexisted with `chatgpt/auto` to force
-    # the free pool. It has been merged into `chatgpt/auto` per user request:
-    # `chatgpt/auto` is now hard-pinned to the free pool inside
-    # `_handle_chatgpt_chat` so there is no longer a separate `free/` slug
-    # to expose. The string remains accepted by the chat handler for
-    # backwards compatibility with HA / saved combos.
+    # Expose the canonical routing prefixes so HA / SDK dropdowns and
+    # combo-model pickers can see each independent pool:
+    #  - free/* → standalone free module (chatgpt.com web, free pool only)
+    #  - paid/auto → plus/go/business unified under Codex (also cx/ , codex/)
+    #  - oai/auto → raw OpenAI API (sk-/standard) — 3rd separate path
+    #  - chatgpt/* → kept as a backwards-compatible alias for free/* so
+    #    existing HA / n8n / saved combos don't break.
+    free_models = ["free/auto",
+                   "free/gpt-4o", "free/gpt-4o-mini", "free/gpt-4.1-mini",
+                   "free/gpt-4.1-nano", "free/o3-mini", "free/o4-mini"]
+    for mid in free_models:
+        if mid not in seen:
+            seen.add(mid)
+            data.append({"id": mid, "object": "model", "created": 0, "owned_by": "chatgpt_free"})
+    # Backwards-compat chatgpt/* aliases (route to the free module).
     openai_extra = ["chatgpt/auto",
                     "chatgpt/gpt-4o", "chatgpt/gpt-4o-mini", "chatgpt/gpt-4.1-mini",
                     "chatgpt/gpt-4.1-nano", "chatgpt/o3-mini", "chatgpt/o4-mini"]
@@ -725,6 +730,11 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
         if mid not in seen:
             seen.add(mid)
             data.append({"id": mid, "object": "model", "created": 0, "owned_by": "chatgpt"})
+    # Paid (Codex) + OpenAI-API entry points.
+    for mid, owner in [("paid/auto", "openai_oauth"), ("oai/auto", "openai_api")]:
+        if mid not in seen:
+            seen.add(mid)
+            data.append({"id": mid, "object": "model", "created": 0, "owned_by": owner})
 
     # Add image models — group by their natural prefix so the UI shows
     # them under their own provider section (e.g. flow/* under "Google

@@ -604,14 +604,19 @@ class CodexOAuthProvider:
         retries don't burn through them. The chatgpt provider picks free
         tokens via `account_service.get_text_access_token(account_type="free")`.
         """
+        from services.account_service import account_group
         excluded = set(exclude_tokens or set())
         with account_service._lock:
             all_items = list(account_service._accounts.values())
-            # Filter to codex pool first so the debug log reflects what we
-            # actually search through.
+            # Filter to the canonical codex/paid pool: real Codex tokens AND
+            # paid-plan accounts (plus/go/business) per account_group(). A
+            # paid account that only carries a chatgpt.com web JWT is still in
+            # this pool — _handle_openai_oauth_chat detects the web JWT and
+            # routes it through the shared chatgpt.com transport instead of the
+            # Codex responses API.
             codex_items = [
                 i for i in all_items
-                if "codex" in str(i.get("type") or "").split(",")
+                if account_group(i) == "codex"
             ]
             logger.info({
                 "event": "codex_debug",
