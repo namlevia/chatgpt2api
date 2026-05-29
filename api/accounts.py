@@ -14,6 +14,7 @@ from api.support import (
     sanitize_sub2api_servers,
 )
 from services.account_service import account_service, account_group
+from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.sub2api_service import (
     list_remote_accounts as sub2api_list_remote_accounts,
@@ -21,6 +22,43 @@ from services.sub2api_service import (
     sub2api_config,
     sub2api_import_service,
 )
+from utils.log import logger
+
+
+def _profile_for_email(email: str) -> str:
+    """chatgpt-<email-localpart> — same convention as jwt_refresh_scheduler /
+    the chatgpt-onboard card, so we delete the right captcha-solver profile."""
+    local = (email.split("@", 1)[0] or "default")
+    safe = "".join(c if c.isalnum() or c == "-" else "-" for c in local)
+    return f"chatgpt-{safe}"
+
+
+def _cleanup_captcha_profiles(accounts: list[dict]) -> None:
+    """Best-effort: delete each account's captcha-solver browser profile when
+    the account is removed, so the on-disk profile doesn't linger (orphan).
+    Skips accounts with no email (sk-/standard/codex-token accounts have no
+    browser profile). Never raises — account deletion already succeeded."""
+    import httpx
+    flow = (config.data.get("providers") or {}).get("flow") or {}
+    cs_url = str(flow.get("captcha_solver_url") or "").rstrip("/")
+    cs_key = str(flow.get("captcha_solver_api_key") or "")
+    if not cs_url:
+        return
+    headers = {"Authorization": f"Bearer {cs_key}"} if cs_key else {}
+    seen: set[str] = set()
+    for acc in accounts:
+        email = str((acc or {}).get("email") or "").strip()
+        if not email or "@" not in email:
+            continue
+        profile = _profile_for_email(email)
+        if profile in seen:
+            continue
+        seen.add(profile)
+        try:
+            r = httpx.delete(f"{cs_url}/v1/profiles/{profile}", headers=headers, timeout=30)
+            logger.info({"event": "captcha_profile_delete", "profile": profile, "status": r.status_code})
+        except Exception as exc:
+            logger.warning({"event": "captcha_profile_delete_failed", "profile": profile, "error": str(exc)[:120]})
 
 
 
@@ -473,7 +511,14 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        return account_service.delete_accounts(tokens)
+        # Snapshot accounts BEFORE deletion so we can derive each one's
+        # captcha-solver browser profile (chatgpt-<email-localpart>) and remove
+        # it too — otherwise a UI delete leaves an orphaned profile dir on disk
+        # (the desync đại ca hit). Best-effort: API delete never fails on this.
+        doomed = [account_service.get_account(t) for t in tokens]
+        result = account_service.delete_accounts(tokens)
+        await run_in_threadpool(_cleanup_captcha_profiles, [a for a in doomed if a])
+        return result
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):
