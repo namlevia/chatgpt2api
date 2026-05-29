@@ -41,14 +41,17 @@ def account_group(account: dict | None) -> str:
 
     Priority order (first match wins):
       1. antigravity  — Google Cloud companion tokens (type contains it)
-      2. codex        — Codex OAuth token, OR a paid plan (plus/go/business…),
-                        OR an explicit `codex` type tag
+      2. codex        — explicit `codex` type tag (real Codex OAuth token)
       3. openai       — raw OpenAI API key (sk-…) or `standard`/`openai` type
-      4. free         — everything else (chatgpt.com web JWT, plan=free)
+                        (api.openai.com); stays here even on a paid plan
+      4. codex        — paid plan (plus/go/business…) on a chatgpt.com web acct
+      5. free         — everything else (chatgpt.com web JWT, plan=free)
 
-    A paid-plan account that only carries a chatgpt.com web JWT still lands in
-    the `codex` group (route picks transport later) — matches đại ca's
-    "phân nhóm theo plan, tự đổi route" decision.
+    Type tags beat plan: an api.openai.com token tagged `standard` can only hit
+    api.openai.com, so a plus/go subscription on it must NOT divert it to the
+    Codex/web pool. A paid-plan chatgpt.com WEB account (no api-only tag) lands
+    in codex and the route picks transport later — "phân nhóm theo plan, tự đổi
+    route".
     """
     if not isinstance(account, dict):
         return GROUP_FREE
@@ -58,10 +61,18 @@ def account_group(account: dict | None) -> str:
 
     if GROUP_ANTIGRAVITY in types:
         return GROUP_ANTIGRAVITY
-    if "codex" in types or plan in PAID_PLANS:
+    # Explicit Codex-token tag wins outright.
+    if "codex" in types:
         return GROUP_CODEX
+    # Explicit OpenAI-API account (sk- key, or `standard`/`openai` JWT bound to
+    # api.openai.com) stays in the openai group REGARDLESS of subscription plan:
+    # such a token can ONLY call api.openai.com — never chatgpt.com web nor the
+    # Codex responses API — so a plus/go plan on it must not divert it to codex.
     if token.startswith("sk-") or "standard" in types or "openai" in types:
         return GROUP_OPENAI
+    # A chatgpt.com web account on a paid subscription → codex/paid pool.
+    if plan in PAID_PLANS:
+        return GROUP_CODEX
     return GROUP_FREE
 
 

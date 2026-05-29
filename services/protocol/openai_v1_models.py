@@ -568,6 +568,7 @@ def _apply_enabled_filter(data: list[dict]) -> list[dict]:
 
     always_allow = {
         "cx/auto", "oc/auto", "chatgpt/auto",
+        "free/auto", "paid/auto", "oai/auto",
         "gemini_free/auto", "ag/auto",
         "gmw/auto", "gmw/vision",
     }
