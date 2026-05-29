@@ -993,6 +993,8 @@ def _handle_chatgpt_chat(
                 "token_expired" in err_msg
                 or "token expired" in err_msg
                 or "expired" in err_msg
+                or "could not parse" in err_msg
+                or "authentication token" in err_msg
             ) and "401" in err_msg
             if is_expired:
                 # Mark expired account disabled so pool skips it.
@@ -1139,8 +1141,15 @@ def _try_chatgpt_with_token(
     # chatgpt.com backend (free account — no openai token)
     # Build a backend bound to OUR rotation-selected token so we don't
     # accidentally re-pick the same burnt account inside text_backend().
+    # JWT tokens issued for api.openai.com can't be used as Bearer on
+    # chatgpt.com — fall back to anonymous (session-only) backend.
     from services.openai_backend_api import OpenAIBackendAPI
-    backend = OpenAIBackendAPI(access_token=token) if token else text_backend()
+    if token and detect_token_audience(token) == _TOKEN_AUDIENCE_OPENAI_API:
+        backend = OpenAIBackendAPI()  # anonymous — JWT rejected by chatgpt.com
+    elif token:
+        backend = OpenAIBackendAPI(access_token=token)
+    else:
+        backend = text_backend()
     from services.config import _IS_ADDON
     if _IS_ADDON:
         # Addon: XML tool call parsing + force hint for HA

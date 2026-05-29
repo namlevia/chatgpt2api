@@ -46,15 +46,31 @@ logger = logging.getLogger(__name__)
 
 
 _DEFAULT_VIEWPORT = {"width": 1366, "height": 768}
-_USER_AGENT = (
+
+# Chrome UA — used only for Chromium / CloakBrowser
+_CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/130.0.0.0 Safari/537.36"
 )
 
-# Injected into every page before any other script runs — masks automation
-# signals that Cloudflare / Google bot detection checks.
-_STEALTH_INIT_SCRIPT = """
+# Firefox UA — used when settings.browser == "firefox" so Google serves
+# the Firefox-compatible page variant, not a Chrome-optimized one.
+_FIREFOX_USER_AGENT = (
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:138.0) "
+    "Gecko/20100101 Firefox/138.0"
+)
+
+
+def _get_user_agent() -> str:
+    """Return user-agent appropriate for the configured browser engine."""
+    return _FIREFOX_USER_AGENT if settings.browser.lower() == "firefox" else _CHROME_USER_AGENT
+
+
+# Injected into every Chromium page before any other script runs.
+# Firefox uses a shorter variant — setting `window.chrome` on Firefox
+# is a red flag because real Firefox doesn't have it.
+_STEALTH_SCRIPT_CHROMIUM = """
 // 1. navigator.webdriver — dead giveaway
 Object.defineProperty(navigator, 'webdriver', { get: () => false });
 
@@ -94,6 +110,52 @@ Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
 // 8. platform — hide Linux from VPS
 Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
 """
+
+# Firefox stealth script — does NOT set window.chrome (Firefox doesn't
+# have it; setting it would be a bot signal). Keeps the other critical
+# overrides that Firefox's engine supports.
+_STEALTH_SCRIPT_FIREFOX = """
+// 1. navigator.webdriver — dead giveaway
+Object.defineProperty(navigator, 'webdriver', { get: () => false });
+
+// 2. languages
+Object.defineProperty(navigator, 'languages', {
+    get: () => ['vi-VN', 'vi', 'en-US', 'en']
+});
+
+// 3. permissions — avoid "Notifications blocked" bot signal
+const _origQueryFF = navigator.permissions.query.bind(navigator.permissions);
+navigator.permissions.query = (params) => (
+    params.name === 'notifications'
+        ? Promise.resolve({ state: 'prompt', onchange: null })
+        : _origQueryFF(params)
+);
+
+// 4. hardwareConcurrency — real machines have >1 cores
+Object.defineProperty(navigator, 'hardwareConcurrency', { get: () => 4 });
+
+// 5. deviceMemory
+Object.defineProperty(navigator, 'deviceMemory', { get: () => 8 });
+
+// 6. platform — hide Linux from VPS
+Object.defineProperty(navigator, 'platform', { get: () => 'Win32' });
+
+// 7. plugins — FirefoxPluginArray is native but we spoof length >0
+Object.defineProperty(navigator, 'plugins', {
+    get: () => {
+        const arr = [1, 2, 3, 4, 5];
+        arr.item = i => undefined;
+        arr.namedItem = n => undefined;
+        arr.refresh = () => {};
+        return arr;
+    }
+});
+"""
+
+
+def _select_stealth_script() -> str:
+    """Return the stealth init script appropriate for the configured browser."""
+    return _STEALTH_SCRIPT_FIREFOX if settings.browser.lower() == "firefox" else _STEALTH_SCRIPT_CHROMIUM
 # Chrome single-instance lock files that linger after a crash and block
 # the next launch with "Profile is already in use".
 _CHROME_LOCK_FILES = ("SingletonLock", "SingletonSocket", "SingletonCookie")
@@ -259,7 +321,9 @@ class BrowserPool:
         
         browser = settings.browser.lower()
         if _CLOAK_AVAILABLE and browser != "firefox":
-            # CloakBrowser: source-level Chromium patches, passes Cloudflare Turnstile automatically
+            # CloakBrowser: source-level Chromium patches, passes Cloudflare Turnstile automatically.
+            # No add_init_script needed — CloakBrowser has 49 source-level C++ patches.
+            # backend='patchright' is NOT used because it breaks init scripts and isn't needed.
             if env:
                 import os as _os
                 for k, v in env.items():
@@ -270,8 +334,7 @@ class BrowserPool:
                 viewport=_DEFAULT_VIEWPORT,
                 locale="vi-VN",
                 timezone="Asia/Ho_Chi_Minh",
-                user_agent=_USER_AGENT,
-                backend='patchright',
+                user_agent=_get_user_agent(),
                 humanize=True,
                 human_preset='careful',
                 args=[
@@ -280,9 +343,11 @@ class BrowserPool:
                     "--disable-infobars",
                     "--no-default-browser-check",
                     "--disable-blink-features=AutomationControlled",
+                    "--disable-features=TranslateUI,BlinkGenPropertyTrees",
+                    "--disable-dev-shm-usage",
+                    "--disable-popup-blocking",
                 ],
             )
-            await context.add_init_script(_STEALTH_INIT_SCRIPT)
         elif browser == "firefox":
             # Firefox: no Google Safe Browsing → bypasses "unsafe browser" error
             # Google trusts Firefox sign-in more than automated Chromium on VPS IPs.
@@ -293,11 +358,11 @@ class BrowserPool:
                 viewport=_DEFAULT_VIEWPORT,
                 locale="vi-VN",
                 timezone_id="Asia/Ho_Chi_Minh",
-                user_agent=_USER_AGENT,
+                user_agent=_get_user_agent(),
                 env=env,
                 ignore_default_args=["--enable-automation"],
             )
-            await context.add_init_script(_STEALTH_INIT_SCRIPT)
+            await context.add_init_script(_select_stealth_script())
         else:
             # Patchright Chromium with stealth patches
             assert self._playwright is not None
@@ -308,7 +373,7 @@ class BrowserPool:
                 viewport=_DEFAULT_VIEWPORT,
                 locale="vi-VN",
                 timezone_id="Asia/Ho_Chi_Minh",
-                user_agent=_USER_AGENT,
+                user_agent=_get_user_agent(),
                 env=env,
                 args=[
                     "--no-first-run",
@@ -317,10 +382,14 @@ class BrowserPool:
                     "--no-default-browser-check",
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
+                    "--disable-popup-blocking",
+                    "--disable-web-security",
+                    "--disable-features=IsolateOrigins,site-per-process",
                 ],
                 ignore_default_args=["--enable-automation"],
+                channel="chrome",
             )
-            await context.add_init_script(_STEALTH_INIT_SCRIPT)
+            await context.add_init_script(_select_stealth_script())
 
         self._attach_close_handler(profile, context)
         pages = context.pages
@@ -330,7 +399,7 @@ class BrowserPool:
         elif _CLOAK_AVAILABLE:
             mode = "cloakbrowser"
         else:
-            mode = "patchright-chromium"
+            mode = "patchright-chromium (via real Chrome)"
         logger.info("opened context profile=%s headless=%s engine=%s", profile, headless, mode)
         return context, page
 

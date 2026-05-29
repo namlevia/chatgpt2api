@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import json
 import logging
 import os
 import tempfile
@@ -119,38 +120,126 @@ async def chat(
     headless: bool = False,
 ) -> dict[str, Any]:
     started = time.time()
+    stages = {}
     async with pool.page(profile=profile, headless=headless) as page:
+        # Navigate
+        nav_ok = False
         try:
             await page.goto(_CHATGPT_HOME, wait_until='domcontentloaded', timeout=20_000)
+            nav_ok = True
+        except Exception as e:
+            logger.warning('chatgpt_web nav failed: %s', str(e)[:120])
+        if nav_ok:
             await asyncio.sleep(2.0)
-        except Exception:
-            pass
-        await _wait_for_ready(page, timeout=15)
-        # Try to type into the prompt editor and send
-        try:
-            editor = page.locator('#prompt-textarea, [data-testid=chat-input], div[contenteditable=true]').first
-            await editor.wait_for(state='visible', timeout=15_000)
-            await editor.click()
-            await editor.fill(prompt)
-            await asyncio.sleep(0.3)
-            send_btn = page.locator('button[data-testid=send-button], button:has(svg)').first
-            await send_btn.click(timeout=5_000)
-        except Exception as exc:
-            logger.warning('chatgpt_web chat type/send failed: %s', str(exc)[:120])
+        stages['nav_ok'] = nav_ok
 
-        # Wait for response
-        await asyncio.sleep(min(timeout, 60))
-        try:
-            reply_el = page.locator('[data-message-author-role=assistant]').last
-            reply_text = await reply_el.inner_text()
-        except Exception:
-            reply_text = ''
+        await _wait_for_ready(page, timeout=15)
+        ready = await page.locator('#prompt-textarea, [data-testid=chat-input], div[contenteditable=true]').count() > 0
+        stages['editor_visible'] = ready
+
+        # Type and send via JS to bypass CloakBrowser stability checks
+        sent = False
+        if ready:
+            try:
+                # Use JS to type into contenteditable and click send
+                sent = await page.evaluate("""
+                    async (promptText) => {
+                        // Find editor
+                        const editor = document.querySelector('#prompt-textarea, [data-testid=chat-input], div[contenteditable=true]');
+                        if (!editor) return false;
+
+                        // Focus and type
+                        editor.focus();
+                        if (editor.getAttribute('contenteditable') === 'true' || editor.isContentEditable) {
+                            editor.innerText = promptText;
+                            editor.dispatchEvent(new InputEvent('input', {bubbles: true, inputType: 'insertText', data: promptText}));
+                        } else {
+                            // Input/textarea fallback
+                            editor.value = promptText;
+                            editor.dispatchEvent(new Event('input', {bubbles: true}));
+                        }
+                        await new Promise(r => setTimeout(r, 300));
+
+                        // Find send button - try data-testid, then aria-label, then the SVG button
+                        let btn = document.querySelector('button[data-testid="send-button"]');
+                        if (!btn) {
+                            btn = document.querySelector('button[aria-label*="Send"], button[aria-label*="Gửi"], button[aria-label*="submit"]');
+                        }
+                        if (!btn) {
+                            // Look for button containing only an SVG (send icon)
+                            const allBtns = document.querySelectorAll('button');
+                            for (const b of allBtns) {
+                                const hasSvg = b.querySelector('svg');
+                                const text = (b.innerText || '').trim();
+                                const aria = (b.getAttribute('aria-label') || '').toLowerCase();
+                                if (hasSvg && !text && (aria.includes('send') || aria.includes('gửi') || aria.includes('submit'))) {
+                                    btn = b;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!btn) return false;
+
+                        btn.click();
+                        return true;
+                    }
+                """, prompt)
+                if sent:
+                    stages['send'] = 'js_ok'
+                else:
+                    # Fallback: Playwright approach
+                    editor = page.locator('#prompt-textarea, [data-testid=chat-input], div[contenteditable=true]').first
+                    await editor.click()
+                    await editor.fill(prompt)
+                    await asyncio.sleep(0.3)
+                    send_btn = page.locator('button[data-testid="send-button"]').first
+                    if await send_btn.count() > 0:
+                        await send_btn.evaluate('el => el.click()')
+                    else:
+                        # Last resort: keyboard Enter
+                        await page.keyboard.press('Enter')
+                    sent = True
+                    stages['send'] = 'playwright_fallback'
+            except Exception as exc:
+                logger.warning('chatgpt_web chat type/send failed: %s', str(exc)[:120])
+                stages['send_error'] = str(exc)[:120]
+
+        if not sent:
+            stages['send'] = 'failed'
+
+        # Wait for response with polling
+        reply_text = ''
+        deadline = time.time() + min(timeout, 90)
+        while time.time() < deadline:
+            await asyncio.sleep(2)
+            try:
+                reply_el = page.locator('[data-message-author-role=assistant]').last
+                if await reply_el.count() > 0:
+                    text = await reply_el.inner_text()
+                    if text and text != reply_text:
+                        reply_text = text
+                        # Keep waiting for more content
+            except Exception:
+                pass
+            # Check for stop button (means still generating)
+            try:
+                stop_btn = page.locator('button[data-testid="stop-button"], button[aria-label*="Stop"], button[aria-label*="Dừng"]').first
+                if await stop_btn.count() > 0:
+                    continue  # still generating
+                if reply_text:
+                    break  # done generating
+            except Exception:
+                pass
+
         elapsed_ms = int((time.time() - started) * 1000)
+        logger.info('chatgpt_web chat result: sent=%s reply_len=%d elapsed=%dms stages=%s',
+                    sent, len(reply_text), elapsed_ms, json.dumps(stages))
         return {
             'profile': profile,
             'prompt': prompt,
             'reply': reply_text,
             'elapsed_ms': elapsed_ms,
+            'stages': stages,
         }
 
 

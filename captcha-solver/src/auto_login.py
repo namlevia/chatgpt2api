@@ -83,14 +83,35 @@ _TAP_MATCH_SELECTORS = (
 # Authenticator option automatically because it's the fastest fully-
 # automatable path — user only has to read the 6-digit Authenticator
 # code and POST it to /v1/session/{profile}/auto-login-2fa-code.
+# IMPORTANT: text-based selectors MUST come before data-challengetype
+# because when "Tap Yes" is disabled, data-challengetype="9" can match
+# the wrong element (the disabled tap option instead of Authenticator).
 _AUTHENTICATOR_OPTION_SELECTORS = (
-    'li[data-challengetype="9"]',          # 9 = TOTP in Google's taxonomy
-    'div[data-challengetype="9"]',
-    'div[role="link"]:has-text("Google Authenticator")',
-    'div[role="link"]:has-text("authenticator")',
     'li:has-text("Google Authenticator")',
     'li:has-text("ứng dụng xác thực")',
+    'div[role="link"]:has-text("Google Authenticator")',
+    'div[role="link"]:has-text("authenticator")',
     'div:has-text("Google Authenticator"):not(:has(div))',
+    'li[data-challengetype="9"]:has-text("Authenticator")',
+    'li[data-challengetype="9"]:has-text("xác thực")',
+    'div[data-challengetype="9"]:has-text("Authenticator")',
+    'div[data-challengetype="9"]:has-text("xác thực")',
+    'li[data-challengetype="9"]',          # last resort
+    'div[data-challengetype="9"]',          # last resort
+)
+
+# Selectors for phone-call / SMS challenge when Google offers the method
+# picker. After clicking, Google calls or texts the enrolled number and
+# then shows a code input — same need_code state as Authenticator.
+_PHONE_OPTION_SELECTORS = (
+    'li:has-text("cuộc gọi đến số")',
+    'li:has-text("nhận cuộc gọi")',
+    'li:has-text("nhận mã qua")',
+    'div[role="link"]:has-text("cuộc gọi đến số")',
+    'div[role="link"]:has-text("nhận cuộc gọi")',
+    'div[role="link"]:has-text("nhận mã qua")',
+    'li:has-text("số điện thoại"):not(:has-text("sử dụng"))',
+    'div[role="link"]:has-text("số điện thoại"):not(:has-text("sử dụng"))',
 )
 
 _METHOD_SELECTOR_HINTS = (
@@ -129,6 +150,38 @@ async def _pick_authenticator_method(page) -> bool:
         except Exception:
             continue
     logger.info("auto_login: method-picker visible but no Authenticator selector matched")
+    return False
+
+
+async def _pick_phone_method(page) -> bool:
+    """When Google shows the method picker, click the phone-call / SMS entry.
+
+    Returns True if a click was made (page likely advances to code input
+    after Google calls/texts). False if the picker isn't visible or no
+    phone option could be found.
+    """
+    try:
+        body_text = (await page.locator("body").inner_text(timeout=600)).lower()
+    except Exception:
+        return False
+    if not any(h in body_text for h in _METHOD_SELECTOR_HINTS):
+        return False
+    if not any(k in body_text for k in (
+        "cuộc gọi", "nhận cuộc gọi", "số điện thoại", "nhận mã qua",
+        "gọi đến số",
+    )):
+        return False
+    for sel in _PHONE_OPTION_SELECTORS:
+        try:
+            loc = page.locator(sel).first
+            if await loc.count() == 0:
+                continue
+            await loc.click(timeout=2500)
+            logger.info("auto_login: picked phone method via selector=%s", sel)
+            return True
+        except Exception:
+            continue
+    logger.info("auto_login: method-picker visible but no phone selector matched")
     return False
 
 
@@ -281,6 +334,43 @@ def submit_2fa_code(profile: str, code: str) -> bool:
     return True
 
 
+async def _nuke_profile(profile: str, max_wait: float = 10.0) -> None:
+    """Delete browser profile directory, retrying until files are unlocked.
+
+    SAFETY: if another session (gemini_web, flow, etc.) is currently using
+    this profile through the browser pool, we skip deletion entirely.
+    Only nuke profiles that are NOT actively in use by another component.
+    """
+    if pool.is_loaded(profile):
+        logger.info("auto_login: profile %s is loaded in pool, skipping nuke", profile)
+        return
+
+    import shutil
+    from .settings import settings as _settings
+    _profile_dir = _settings.data_dir / "profiles" / profile
+    if not _profile_dir.exists():
+        return
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            shutil.rmtree(str(_profile_dir), ignore_errors=False)
+            logger.info("auto_login: nuked profile %s", profile)
+            return
+        except PermissionError:
+            logger.warning("auto_login: profile %s locked, retrying in 1s...", profile)
+            await asyncio.sleep(1.0)
+        except Exception as exc:
+            logger.warning("auto_login: rmtree attempt failed: %s, retrying...", exc)
+            await asyncio.sleep(1.0)
+    # Last resort: rename out of the way
+    try:
+        backup = _profile_dir.with_name(_profile_dir.name + f".old-{int(time.time())}")
+        shutil.move(str(_profile_dir), str(backup))
+        logger.warning("auto_login: could not delete, renamed to %s", backup.name)
+    except Exception as exc:
+        logger.error("auto_login: profile cleanup failed completely: %s", exc)
+
+
 async def start_auto_login(
     profile: str,
     email: str,
@@ -293,7 +383,8 @@ async def start_auto_login(
 
     `prefer_method` selects the 2FA path when Google offers a picker:
     "auth" = click Authenticator (need_code), "tap" = wait for the
-    tap-on-device prompt (need_tap).
+    tap-on-device prompt (need_tap), "phone" = click phone call / SMS
+    option (need_code after Google calls/texts).
 
     If `totp_secret` is provided and pyotp is installed, 2FA codes are
     auto-generated instead of waiting for manual input.
@@ -307,10 +398,15 @@ async def start_auto_login(
         email=email,
         state="starting",
         message="Khởi tạo Chrome",
-        prefer_method=prefer_method if prefer_method in ("auth", "tap") else "auth",
+        prefer_method=prefer_method if prefer_method in ("auth", "tap", "phone") else "auth",
         totp_secret=totp_secret,
     )
     _sessions[profile] = session
+
+    # Always close old context and nuke profile for fresh login.
+    # Google must NOT remember the previous account.
+    await pool.close_profile(profile)
+    await _nuke_profile(profile)
 
     task = asyncio.create_task(_run(session, password))
     _tasks[profile] = task
@@ -419,17 +515,36 @@ async def do_google_login_steps(
 
     `prefer_method` selects how to satisfy a 2FA challenge when Google
     offers a method picker:
-      "auth" — click the Authenticator option; flow advances to need_code
-               and the user POSTs the 6-digit code via the existing
-               /auto-login-2fa-code endpoint.
-      "tap"  — skip the picker; let Google fall through to the
-               tap-on-device prompt (need_tap). The user opens Gmail/
-               Google app on their phone and taps "Yes, it's me".
+      "auth"  — click the Authenticator option; flow advances to need_code
+                and the user POSTs the 6-digit code via the existing
+                /auto-login-2fa-code endpoint.
+      "tap"   — skip the picker; let Google fall through to the
+                tap-on-device prompt (need_tap). The user opens Gmail/
+                Google app on their phone and taps "Yes, it's me".
+      "phone" — click the phone-call / SMS option; Google calls or texts
+                the enrolled number, then shows a code input (need_code).
 
     Updates `session.state` / `.message` / `.error` in-place. Returns
     True on success, False on failure. Caller decides what to do next
     (e.g. scrape session cookies, navigate elsewhere, etc).
     """
+    # ── Google block detection: check if Google served an error page ──
+    try:
+        body = (await page.locator("body").inner_text(timeout=2000)).lower()
+        if any(k in body for k in (
+            "browser or app may not be secure",
+            "trình duyệt hoặc ứng dụng này có thể không an toàn",
+            "couldn't sign you in",
+            "không thể đăng nhập",
+        )):
+            logger.error("auto_login: Google blocked the browser! body snippet=%s", body[:300])
+            session.state = "failed"
+            session.error = "Google chặn trình duyệt — thử dùng Firefox hoặc đăng nhập thủ công qua noVNC"
+            session.completed_at = time.time()
+            return False
+    except Exception:
+        pass
+
     # ── Email step ──
     session.message = "Điền email..."
     try:
@@ -437,7 +552,31 @@ async def do_google_login_steps(
         await email_input.wait_for(state="visible", timeout=15_000)
         await email_input.fill(session.email)
         await asyncio.sleep(0.8)
-        await _safe_click(page, '#identifierNext button', 'span[jsname="V67aGc"]', 'button[jsname="LgbsSe"]:visible')
+        # v3 page uses different Next button patterns
+        clicked = await _safe_click(
+            page,
+            '#identifierNext button',
+            '#identifierNext',
+            'button:has-text("Next")',
+            'button:has-text("Tiếp theo")',
+            'span[jsname="V67aGc"]',
+            'button[jsname="LgbsSe"]:visible',
+            'div[role="button"]:has-text("Next")',
+            'div[role="button"]:has-text("Tiếp theo")',
+        )
+        if not clicked:
+            # JS fallback: find and click any visible Next button
+            await page.evaluate("""() => {
+                const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                for (const el of all) {
+                    if (!el.offsetParent) continue;
+                    const t = (el.innerText || '').trim().toLowerCase();
+                    if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                        el.click();
+                        return;
+                    }
+                }
+            }""")
     except Exception as exc:
         session.state = "failed"
         session.error = f"Không tìm thấy ô email: {exc}"
@@ -445,6 +584,15 @@ async def do_google_login_steps(
         return False
 
     await asyncio.sleep(2.0)
+
+    # Debug: log what page Google shows after email
+    try:
+        url = page.url or "?"
+        title = await page.title() or ""
+        body = (await page.locator("body").inner_text(timeout=2000))[:500]
+        logger.info("auto_login: after email, url=%s title=%r body=%s", url[:120], title[:80], body[:300])
+    except Exception:
+        pass
 
     # ── Password step ──
     session.message = "Điền mật khẩu..."
@@ -468,19 +616,24 @@ async def do_google_login_steps(
         await asyncio.sleep(2.0)
 
         # If Google shows the method picker (tap-on-device / Authenticator /
-        # SMS / recovery email), pick Authenticator automatically when the
-        # caller asked for the auth path. With prefer_method="tap" we skip
-        # the picker entirely and let _detect_state fall through to
-        # need_tap, so the user's existing on-device prompt drives the
-        # confirmation instead of getting overridden by an Authenticator
-        # click.
-        if session.prefer_method == "auth" and not picker_clicked:
+        # phone-call / SMS / recovery email), pick the method automatically
+        # when the caller asked for auth or phone path.
+        # With prefer_method="tap" we skip the picker entirely and let
+        # _detect_state fall through to need_tap.
+        if session.prefer_method in ("auth", "phone") and not picker_clicked:
             try:
-                if await _pick_authenticator_method(page):
-                    picker_clicked = True
-                    session.message = "Đã chọn Google Authenticator, đang chờ code..."
-                    await asyncio.sleep(1.5)
-                    continue
+                if session.prefer_method == "phone":
+                    if await _pick_phone_method(page):
+                        picker_clicked = True
+                        session.message = "Đã chọn xác minh qua số điện thoại, đang chờ code..."
+                        await asyncio.sleep(1.5)
+                        continue
+                else:
+                    if await _pick_authenticator_method(page):
+                        picker_clicked = True
+                        session.message = "Đã chọn Google Authenticator, đang chờ code..."
+                        await asyncio.sleep(1.5)
+                        continue
             except Exception:
                 pass
 
@@ -576,12 +729,6 @@ async def _run(session: LoginSession, password: str) -> None:
         session.state = "starting"
         session.message = "Đang mở Chrome (headful → noVNC)"
         ctx = await pool.get(profile=session.profile, headless=False, force_recreate=True)
-
-        if await _already_logged_in(ctx):
-            session.state = "success"
-            session.message = "Profile đã có session Google — không cần đăng nhập lại"
-            session.completed_at = time.time()
-            return
 
         pages = ctx.pages
         page = pages[0] if pages else await ctx.new_page()

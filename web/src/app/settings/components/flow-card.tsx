@@ -301,6 +301,7 @@ export function FlowCard() {
           email: autoLogin.email.trim(),
           password: autoLogin.password,
           totp_secret: autoLogin.totpSecret.trim(),
+          prefer_method: "auth",
         }),
       });
       if (!loginRes.ok) throw new Error(`auto-login HTTP ${loginRes.status}`);
@@ -380,6 +381,7 @@ export function FlowCard() {
           email: autoLogin.email.trim(),
           password: autoLogin.password,
           totp_secret: autoLogin.totpSecret.trim(),
+          prefer_method: "auth",
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

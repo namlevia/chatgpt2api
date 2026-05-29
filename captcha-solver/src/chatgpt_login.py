@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 from .browser_pool import pool
+from .auto_login import click_google_oauth_consent
 
 try:
     import pyotp
@@ -26,6 +27,9 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 _CHATGPT_URL = "https://chatgpt.com/"
+_CHATGPT_LOGIN_URL = "https://chatgpt.com/auth/login"
+# Auth0 universal login for ChatGPT — bypasses Cloudflare on chatgpt.com
+_AUTH0_LOGIN_URL = "https://auth.openai.com/u/login"
 _AUTH_OPENAI = "https://auth.openai.com/"
 
 # Selectors for "Continue with Google" on auth.openai.com
@@ -36,6 +40,22 @@ _GOOGLE_BTN_SELECTORS = (
     'a[href*="accounts.google.com"]',
     'button[aria-label*="Google"]',
     'form[action*="accounts.google.com"] button',
+    # Auth0 / social-login button patterns (used by OpenAI)
+    'button[class*="google"]',
+    'button[class*="Google"]',
+    'div[class*="google"][role="button"]',
+    'div[class*="Google"][role="button"]',
+    'button[class*="social"]',
+    'div[class*="social"]',
+    # Direct match on any element whose text starts/contains Google
+    '*:has-text("Continue with Google"):not(html):not(body)',
+    '*:has-text("Tiếp tục với Google"):not(html):not(body)',
+    # Links that look like Google OAuth redirects
+    'a[href*="accounts.google.com/o/oauth2"]',
+    'a[href*="accounts.google.com/signin/oauth"]',
+    # Generic: any button inside a form pointing at Google
+    'form[action*="google"] button',
+    'form[action*="google"] input[type="submit"]',
 )
 
 # Selectors for Google 2FA code input
@@ -107,28 +127,46 @@ async def _pick_authenticator_method(page) -> bool:
     except Exception:
         return False
 
-    if not any(h in body_text for h in _METHOD_SELECTOR_HINTS):
+    # Broad check: are we on a 2FA-related page? Google v3 shows various
+    # texts like "Verify it's you", "Xác minh danh tính", "2-Step Verification",
+    # "Choose how you'll sign in", or the phone prompt itself.
+    _2FA_PAGE_HINTS = _METHOD_SELECTOR_HINTS + (
+        "verify it's you", "xác minh danh tính", "xac minh danh tinh",
+        "2-step verification", "xác minh 2 bước",
+        "google prompt", "gửi lời nhắc",
+        "open your google app", "mở ứng dụng google",
+        "tap yes", "nhấn có",
+        "unlock your phone", "mở khóa điện thoại",
+        "more ways to verify", "thêm cách xác minh",
+        "verify your identity", "xác minh danh tính của bạn",
+    )
+    is_2fa_page = any(h in body_text for h in _2FA_PAGE_HINTS)
+
+    # Also check URL for 2FA paths
+    try:
+        url = page.url or ""
+        is_2fa_page = is_2fa_page or "challenge" in url or "signin/v2/challenge" in url
+    except Exception:
+        pass
+
+    if not is_2fa_page:
         return False
 
-    # Log ALL available challenge options for debugging
+    # Log body and li elements for debugging
+    logger.info("chatgpt_login: 2FA page detected, body_snippet=%s", body_text[:250])
     try:
-        all_items = page.locator('li[data-challengetype], div[data-challengetype]')
-        count = await all_items.count()
-        opts = []
-        for i in range(min(count, 8)):
-            try:
-                el = all_items.nth(i)
-                ct = await el.get_attribute("data-challengetype")
-                txt = (await el.inner_text())[:60]
-                opts.append(f"type={ct} text='{txt}'")
-            except Exception:
-                pass
-        # Also try to list all li elements in the method picker
-        all_lis = page.locator('ul li, div[role="list"] li, section li')
+        all_lis = page.locator('ul li, div[role="list"] li, section li, li')
         lic = await all_lis.count()
         if lic > 0:
-            opts.append(f"[total {lic} li elements]")
-        logger.info("chatgpt_login: method picker options: %s", " | ".join(opts) if opts else "none found")
+            li_texts = []
+            for i in range(min(lic, 10)):
+                try:
+                    txt = (await all_lis.nth(i).inner_text(timeout=300))[:50]
+                    if txt.strip():
+                        li_texts.append(txt.strip())
+                except Exception:
+                    pass
+            logger.info("chatgpt_login: first %d li texts: %s", min(lic, 10), li_texts)
     except Exception:
         pass
 
@@ -315,12 +353,52 @@ async def start_chatgpt_onboard(
     )
     _sessions[profile] = session
 
-    # Kill any existing browser context so we start fresh
+    # Kill any existing browser context and nuke old profile.
+    # We must wait for Chrome processes to fully exit before deleting,
+    # otherwise shutil.rmtree fails silently (ignore_errors=True) and
+    # the new context reuses old cookies → Google skips login screen.
     await pool.close_profile(profile)
-    await asyncio.sleep(0.5)
+    await _nuke_profile(profile)
 
     asyncio.create_task(_run_onboard(session, password))
     return session
+
+
+async def _nuke_profile(profile: str, max_wait: float = 10.0) -> None:
+    """Delete browser profile directory, retrying until files are unlocked.
+
+    SAFETY: if another session (gemini_web, flow, etc.) is currently using
+    this profile through the browser pool, we skip deletion entirely.
+    Only nuke profiles that are NOT actively in use by another component.
+    """
+    if pool.is_loaded(profile):
+        logger.info("chatgpt_login: profile %s is loaded in pool, skipping nuke", profile)
+        return
+
+    import shutil
+    from .settings import settings as _settings
+    _profile_dir = _settings.data_dir / "profiles" / profile
+    if not _profile_dir.exists():
+        return
+    deadline = time.time() + max_wait
+    while time.time() < deadline:
+        try:
+            shutil.rmtree(str(_profile_dir), ignore_errors=False)
+            logger.info("chatgpt_login: nuked profile %s", profile)
+            return
+        except PermissionError:
+            logger.warning("chatgpt_login: profile %s locked, retrying in 1s...", profile)
+            await asyncio.sleep(1.0)
+        except Exception as exc:
+            logger.warning("chatgpt_login: rmtree attempt failed: %s, retrying...", exc)
+            await asyncio.sleep(1.0)
+    # Last resort: rename out of the way so next launch gets a clean dir
+    try:
+        backup = _profile_dir.with_name(_profile_dir.name + f".old-{int(time.time())}")
+        shutil.move(str(_profile_dir), str(backup))
+        logger.warning("chatgpt_login: could not delete, renamed to %s", backup.name)
+    except Exception as exc:
+        logger.error("chatgpt_login: profile cleanup failed completely: %s", exc)
 
 
 async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
@@ -328,43 +406,140 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
     started_at = time.time()
     try:
         async with pool.page(profile=session.profile, headless=False) as page:
-            # ── Step 1: Navigate to chatgpt.com ──
+            # ── Step 0: Purge ALL Google cookies (belt-and-suspenders) ──
+            # Even after nuking the profile, Chrome may restore cookies from
+            # sync or a leftover session. This ensures we ALWAYS start fresh.
             session.state = "running"
-            session.message = "Dang mo chatgpt.com..."
-            logger.info("chatgpt_login: navigating to %s", _CHATGPT_URL)
-            await page.goto(_CHATGPT_URL, wait_until="domcontentloaded", timeout=30_000)
-            await asyncio.sleep(2.0)
-
-            # ── Step 2: Click "Log in" on chatgpt.com ──
-            session.message = "Dang tim nut Login..."
-            login_clicked = False
-            login_selectors = (
-                'button:has-text("Log in")',
-                'button:has-text("Đăng nhập")',
-                'a[href*="/auth/login"]',
-                'a[href*="auth.openai.com"]',
-                'button[data-testid="login-button"]',
+            session.message = "Dang xoa Google cookies cu..."
+            _google_domains = (
+                "https://accounts.google.com/",
+                "https://google.com/",
+                "https://myaccount.google.com/",
+                "https://mail.google.com/",
             )
-            for sel in login_selectors:
+            for _gdom in _google_domains:
                 try:
-                    loc = page.locator(sel).first
-                    if await loc.count() > 0:
-                        await loc.click(timeout=5_000)
-                        login_clicked = True
-                        logger.info("chatgpt_login: clicked login via %s", sel)
-                        break
+                    gc = await page.context.cookies(_gdom)
+                    for c in gc:
+                        try:
+                            await page.context.clear_cookies(name=c.get("name"), domain=c.get("domain", ""))
+                        except Exception:
+                            pass
+                    if gc:
+                        logger.info("chatgpt_login: cleared %d cookies for %s", len(gc), _gdom)
+                except Exception:
+                    pass
+
+            # ── Step 1: Clear stale Auth0 cookies so we see the login widget ──
+            # (not the "Your session has ended" page which redirects to
+            # chatgpt.com/api/auth/error → Cloudflare Turnstile).
+            session.state = "running"
+            session.message = "Dang xoa cookie Auth0 cu..."
+            logger.info("chatgpt_login: clearing auth.openai.com cookies")
+            try:
+                auth0_cookies = await page.context.cookies("https://auth.openai.com/")
+                if auth0_cookies:
+                    for c in auth0_cookies:
+                        try:
+                            await page.context.clear_cookies(name=c.get("name"), domain="auth.openai.com")
+                        except Exception:
+                            pass
+                    logger.info("chatgpt_login: cleared %d auth0 cookies", len(auth0_cookies))
+            except Exception as exc:
+                logger.warning("chatgpt_login: cookie clear failed: %s", exc)
+
+            # ── Step 2: Navigate to auth.openai.com (Auth0, bypasses Cloudflare) ──
+            session.message = "Dang mo trang dang nhap OpenAI..."
+            logger.info("chatgpt_login: navigating to %s", _AUTH0_LOGIN_URL)
+            await page.goto(_AUTH0_LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
+            await asyncio.sleep(3.0)
+
+            # ── Step 3: Handle "Session ended" landing page if it still appears ──
+            # If Auth0 still shows "Your session has ended" with a login button,
+            # click it to reach the universal login widget.
+            session.message = "Dang kiem tra trang Auth0..."
+            auth0_login_clicked = False
+            _AUTH0_LOGIN_BTN_SELECTORS = (
+                'button:has-text("Đăng nhập")',
+                'button:has-text("Log in")',
+                'button:has-text("Sign in")',
+                'a:has-text("Đăng nhập")',
+                'a:has-text("Log in")',
+                'a:has-text("Sign in")',
+                'button[class*="login"]',
+                'button[class*="Login"]',
+                'a[class*="login"]',
+                'a[class*="Login"]',
+                'button[data-action*="login"]',
+                'a[href*="login"]',
+                '[class*="auth0"] button',
+                'form[action*="login"] button',
+            )
+            for pg in page.context.pages:
+                try:
+                    if pg.is_closed():
+                        continue
                 except Exception:
                     continue
+                for sel in _AUTH0_LOGIN_BTN_SELECTORS:
+                    try:
+                        loc = pg.locator(sel).first
+                        if await loc.count() > 0:
+                            await loc.click(timeout=5_000)
+                            auth0_login_clicked = True
+                            logger.info("chatgpt_login: clicked Auth0 login via %s", sel)
+                            break
+                    except Exception:
+                        continue
+                if auth0_login_clicked:
+                    break
 
-            if login_clicked:
-                await asyncio.sleep(3.0)
+            if not auth0_login_clicked:
+                # JS fallback: click any visible button with login text
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        clicked = await pg.evaluate("""() => {
+                            const all = document.querySelectorAll('button, a, div[role="button"]');
+                            for (const el of all) {
+                                if (!el.offsetParent) continue;
+                                const txt = (el.innerText || '').toLowerCase().trim();
+                                if (txt === 'đăng nhập' || txt === 'log in' || txt === 'sign in' || txt === 'login') {
+                                    el.click();
+                                    return txt;
+                                }
+                            }
+                            return null;
+                        }""")
+                        if clicked:
+                            auth0_login_clicked = True
+                            logger.info("chatgpt_login: JS fallback clicked Auth0 login — %s", clicked)
+                            break
+                    except Exception:
+                        continue
 
-            # ── Step 3: Click "Continue with Google" ──
-            # May be on auth.openai.com or a popup
+            if auth0_login_clicked:
+                logger.info("chatgpt_login: Auth0 login clicked, waiting for widget to load...")
+                await asyncio.sleep(4.0)
+            else:
+                logger.warning("chatgpt_login: no Auth0 login button found, page may already show widget")
+
+            # ── Step 4: Click "Continue with Google" on auth.openai.com ──
             session.message = "Dang tim nut Google..."
+
+            # Track whether we used a proper OAuth URL (with client_id,
+            # redirect_uri, etc.) or fell back to bare accounts.google.com.
+            # Step 6.5 needs to know: if bare login, we must navigate back
+            # to auth.openai.com to trigger the real OAuth consent flow.
+            _google_oauth_used = False
 
             # Check all open pages for the Google button
             google_clicked = False
+            google_page = None
             for pg in page.context.pages:
                 try:
                     if pg.is_closed():
@@ -376,9 +551,9 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                     try:
                         loc = pg.locator(sel).first
                         if await loc.count() > 0:
-                            # Wait for any navigation triggered by click
                             await loc.click(timeout=5_000)
                             google_clicked = True
+                            _google_oauth_used = True
                             logger.info("chatgpt_login: clicked Google via %s on %s", sel, pg.url)
                             break
                     except Exception:
@@ -387,65 +562,475 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                     break
 
             if not google_clicked:
-                # Fallback: navigate directly to Google OAuth
-                logger.warning("chatgpt_login: couldn't find Google button, trying direct Google login")
-                session.message = "Khong tim thay nut Google, thu direct login..."
-                await page.goto(
-                    "https://accounts.google.com/signin/v2/identifier"
-                    "?hl=vi&service=accountsettings",
-                    wait_until="domcontentloaded",
-                    timeout=30_000,
-                )
+                # ── Fallback A: dump page buttons for debugging, then JS click ──
+                logger.warning("chatgpt_login: selectors failed, analyzing page...")
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        url = pg.url or "?"
+                        title = await pg.title() or ""
+                        # Dump all visible buttons/links using locator (not evaluate)
+                        try:
+                            all_btns = pg.locator('button:visible, a:visible, [role="button"]:visible')
+                            btn_count = await all_btns.count()
+                            btn_texts = []
+                            for i in range(min(btn_count, 20)):
+                                try:
+                                    txt = await all_btns.nth(i).inner_text(timeout=500)
+                                    btn_texts.append(txt.strip()[:60] if txt else "")
+                                except Exception:
+                                    btn_texts.append("(error)")
+                            logger.warning("chatgpt_login: page %s title=%r visible_buttons=%s", url[:100], title[:60], btn_texts)
+                        except Exception as exc:
+                            logger.warning("chatgpt_login: button scan error: %s", exc)
+                    except Exception:
+                        pass
+
+                # Try JS click on visible Google-related element
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        clicked = await pg.evaluate("""() => {
+                            const all = document.querySelectorAll('button, a, div[role="button"], span[role="button"], input[type="submit"]');
+                            for (const el of all) {
+                                if (!el.offsetParent) continue;
+                                const txt = (el.innerText || el.getAttribute('aria-label') || el.value || '').toLowerCase();
+                                const href = el.getAttribute('href') || '';
+                                const cls = (el.className || '').toLowerCase();
+                                if (txt.includes('google') || href.includes('accounts.google.com') || cls.includes('google')) {
+                                    el.click();
+                                    return 'clicked: ' + txt.slice(0, 50);
+                                }
+                            }
+                            return null;
+                        }""")
+                        if clicked:
+                            google_clicked = True
+                            _google_oauth_used = True
+                            logger.info("chatgpt_login: JS fallback clicked Google — %s", clicked)
+                            break
+                    except Exception:
+                        continue
+
+            if not google_clicked:
+                # ── Check if any page already landed on Google (JS clicks may have
+                #    opened a new tab even when they returned no match string). ──
+                google_page = None
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    pg_url = pg.url or ""
+                    if "accounts.google.com" in pg_url:
+                        google_clicked = True
+                        _google_oauth_used = True
+                        google_page = pg
+                        logger.info("chatgpt_login: found existing Google page: %s", pg_url[:120])
+                        break
+
+            if not google_clicked:
+                # ── Fallback B: extract the REAL Google OAuth URL from the page.
+                #    A bare Google sign-in page WITHOUT OAuth parameters
+                #    (client_id, redirect_uri, state, nonce, response_type)
+                #    causes Google Error 400 — Google doesn't know where to
+                #    redirect after login. We MUST use the actual OAuth URL
+                #    that was generated during the Auth0 → Google flow. ──
+                logger.warning("chatgpt_login: all button attempts failed, extracting Google OAuth URL from DOM...")
+                session.message = "Dang trich xuat Google OAuth URL..."
+                oauth_url: Optional[str] = None
+
+                # Search ALL pages for a Google OAuth link (including hidden DOM nodes
+                # and inside shadow DOM where Auth0 widgets render).
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    try:
+                        oauth_url = await pg.evaluate("""() => {
+                            // Anchor tags with Google OAuth / signin URLs
+                            const links = document.querySelectorAll('a[href*="accounts.google.com"]');
+                            for (const a of links) {
+                                const h = a.getAttribute('href');
+                                // Prefer OAuth URLs with proper params
+                                if (h.includes('oauth') || h.includes('openidrealm') || h.includes('redirect_uri')) return h;
+                            }
+                            // Any href to Google (even without oauth keyword)
+                            for (const a of links) {
+                                const h = a.getAttribute('href');
+                                if (h && h.includes('accounts.google.com')) return h;
+                            }
+                            // Form actions
+                            const forms = document.querySelectorAll('form[action*="accounts.google.com"]');
+                            for (const f of forms) {
+                                return f.getAttribute('action');
+                            }
+                            // data attributes
+                            const all = document.querySelectorAll(
+                                '[data-url*="accounts.google"], [data-href*="accounts.google"], '
+                                + '[onclick*="accounts.google"]'
+                            );
+                            for (const el of all) {
+                                const d = el.getAttribute('data-url') || el.getAttribute('data-href');
+                                if (d && d.includes('accounts.google.com')) return d;
+                            }
+                            return null;
+                        }""")
+                        if oauth_url:
+                            logger.info("chatgpt_login: extracted Google OAuth URL from DOM: %s", oauth_url[:200])
+                            break
+                    except Exception as exc:
+                        logger.warning("chatgpt_login: OAuth URL extraction failed: %s", exc)
+
+                if oauth_url:
+                    try:
+                        google_page = await page.context.new_page()
+                        await google_page.goto(oauth_url, wait_until="domcontentloaded", timeout=30_000)
+                        google_clicked = True
+                        _google_oauth_used = True
+                        logger.info("chatgpt_login: navigated to extracted OAuth URL")
+                    except Exception as exc:
+                        logger.error("chatgpt_login: OAuth URL navigation failed: %s", exc)
+
+                if not google_clicked:
+                    # ── Fallback C: Auth0 supports `connection=google-oauth2`
+                    #    query parameter on the /authorize or /login endpoint,
+                    #    which bypasses the widget and redirects directly to
+                    #    Google's OAuth consent screen with all required params. ──
+                    logger.warning("chatgpt_login: no OAuth URL in DOM, trying Auth0 connection param...")
+                    session.message = "Dang thu Auth0 Google redirect..."
+                    for pg in page.context.pages:
+                        try:
+                            if pg.is_closed():
+                                continue
+                        except Exception:
+                            continue
+                        pg_url = pg.url or ""
+                        # auth.openai.com/authorize?... or auth.openai.com/u/login
+                        if "auth.openai.com" not in pg_url:
+                            continue
+                        try:
+                            sep = "&" if "?" in pg_url else "?"
+                            auth0_google_url = f"{pg_url}{sep}connection=google-oauth2"
+                            google_page = await page.context.new_page()
+                            await google_page.goto(auth0_google_url, wait_until="domcontentloaded", timeout=30_000)
+                            google_clicked = True
+                            _google_oauth_used = True
+                            logger.info("chatgpt_login: Auth0 connection param redirected to Google")
+                            break
+                        except Exception as exc:
+                            logger.warning("chatgpt_login: Auth0 connection param failed: %s", exc)
+
+                if not google_clicked:
+                    # ── Fallback D: navigate to main Google page for login,
+                    #    then come back to auth.openai.com for OAuth consent.
+                    #    accounts.google.com handles sign-in correctly (no 400
+                    #    error like the bare v3/signin/identifier API endpoint). ──
+                    logger.warning("chatgpt_login: OAuth methods exhausted, falling back to accounts.google.com...")
+                    session.message = "Dang mo accounts.google.com..."
+                    try:
+                        google_page = await page.context.new_page()
+                        await google_page.goto(
+                            "https://accounts.google.com/?hl=vi",
+                            wait_until="domcontentloaded",
+                            timeout=30_000,
+                        )
+                        google_clicked = True
+                        logger.info("chatgpt_login: opened accounts.google.com for direct login")
+                    except Exception as exc:
+                        logger.error("chatgpt_login: accounts.google.com navigation failed: %s", exc)
+                        session.state = "failed"
+                        session.error = "Khong the mo Google — Auth0 widget khong load, thu lai sau"
+                        return
 
             await asyncio.sleep(2.0)
 
             # ── Step 4: Google login (email) ──
-            session.message = "Dang nhap Google email..."
+            # First check if we're already logged into Google. If so, look for
+            # OAuth consent screen instead of email form.
+            session.message = "Kiem tra trang thai Google..."
+            # Wait for the Google page (or any page) to settle
+            _wait_pages = [google_page] if (google_clicked and google_page) else page.context.pages
+            for _pg in _wait_pages:
+                try:
+                    if _pg.is_closed():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    await _pg.wait_for_load_state("networkidle", timeout=8_000)
+                except Exception:
+                    pass
+            await asyncio.sleep(1.0)
+
+            already_logged_into_google = False
             for pg in page.context.pages:
                 try:
                     if pg.is_closed():
                         continue
                 except Exception:
                     continue
+                pg_url = pg.url or ""
+                if "myaccount.google.com" in pg_url:
+                    already_logged_into_google = True
+                    logger.info("chatgpt_login: already logged into Google (url=%s), using OAuth consent", pg_url[:100])
+                    break
 
-                # Google email input
-                email_filled = False
-                email_selectors = (
-                    'input[type="email"]',
-                    'input[name="identifier"]',
-                    '#identifierId',
-                )
-                for sel in email_selectors:
+            if already_logged_into_google:
+                # Profile has Google session — just need OAuth consent for ChatGPT
+                session.message = "Da co Google session, dang OAuth consent..."
+                for pg in page.context.pages:
                     try:
-                        loc = pg.locator(sel).first
-                        if await loc.count() > 0:
-                            await loc.click(timeout=3000)
-                            await loc.fill("")
-                            await asyncio.sleep(random.uniform(0.2, 0.5))
-                            await _type_human_like(loc, session.email)
-                            email_filled = True
-                            logger.info("chatgpt_login: filled email via %s", sel)
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    if "accounts.google.com" not in (pg.url or ""):
+                        continue
+                    consent_clicked = await click_google_oauth_consent(pg, timeout=15.0)
+                    if consent_clicked:
+                        logger.info("chatgpt_login: OAuth consent clicked, waiting for redirect...")
+                        session.message = "Da click OAuth consent, dang cho redirect..."
+                        for _ in range(20):
+                            await asyncio.sleep(3.0)
+                            for p in page.context.pages:
+                                try:
+                                    if p.is_closed():
+                                        continue
+                                except Exception:
+                                    continue
+                                if "chatgpt.com" in (p.url or "") and "auth" not in (p.url or ""):
+                                    session.state = "success"
+                                    session.message = "Da redirect ve chatgpt.com"
+                                    break
+                            if session.state == "success":
+                                break
+                        if session.state == "success":
                             break
+                    else:
+                        logger.warning("chatgpt_login: consent not found on Google page")
+                if session.state == "success":
+                    # Scrape token directly from the pre-existing Google session flow
+                    token, captured, preview = await _scrape_chatgpt_token(page)
+                    if token:
+                        session.access_token = token
+                        session.captured_email = captured or session.email
+                        session.access_token_preview = preview
+                        session.message = f"Lay token thanh cong ({captured or session.email})"
+                        logger.info("chatgpt_login: scraped token via OAuth consent path preview=%s", preview)
+                    else:
+                        session.state = "failed"
+                        session.error = "Dang nhap OK nhung khong scrape duoc JWT"
+                    return
+                else:
+                    session.state = "failed"
+                    session.error = "Co Google session nhung khong hoan tat OAuth cho ChatGPT"
+                    return
+            else:
+                # Need fresh Google login
+                email_filled = False
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
                     except Exception:
                         continue
 
-                if email_filled:
-                    # Click "Next" / "Tiếp theo"
-                    await asyncio.sleep(0.3)
-                    await _safe_click(
-                        pg,
-                        'button:has-text("Next")',
-                        'button:has-text("Tiếp theo")',
-                        'span[jsname="V67aGc"]',
-                        '#identifierNext',
-                        'button[jsname="LgbsSe"]:visible',
+                    try:
+                        pg_url = pg.url or "?"
+                        pg_title = await pg.title() or ""
+                        logger.info("chatgpt_login: checking page url=%s title=%r for email input", pg_url[:120], pg_title[:60])
+                    except Exception:
+                        pass
+
+                    # Check for Google "unsafe browser" block page
+                    try:
+                        body = (await pg.locator("body").inner_text(timeout=1000)).lower()
+                        if any(k in body for k in (
+                            "browser or app may not be secure",
+                            "trình duyệt hoặc ứng dụng này có thể không an toàn",
+                            "couldn't sign you in",
+                            "không thể đăng nhập",
+                        )):
+                            logger.error("chatgpt_login: Google blocked the browser! body snippet=%s", body[:300])
+                            session.state = "failed"
+                            session.error = "Google chặn trình duyệt — thử đăng nhập thủ công qua noVNC"
+                            return
+                    except Exception:
+                        pass
+
+                    email_selectors = (
+                        'input[type="email"]',
+                        'input[name="identifier"]',
+                        '#identifierId',
+                        'input[autocomplete="username"]',
+                        'input[type="text"][name="identifier"]',
+                        'input[type="text"][autocomplete*="email"]',
                     )
-                    break
+                    for sel in email_selectors:
+                        try:
+                            loc = pg.locator(sel).first
+                            if await loc.count() > 0:
+                                await loc.click(timeout=3000)
+                                await asyncio.sleep(random.uniform(0.2, 0.4))
+                                await loc.fill(session.email)
+                                await asyncio.sleep(random.uniform(0.3, 0.6))
+                                email_filled = True
+                                logger.info("chatgpt_login: filled email via %s", sel)
+                                break
+                        except Exception:
+                            continue
+
+                    if email_filled:
+                        await asyncio.sleep(random.uniform(0.5, 1.0))
+                        # Google v3: press Enter first (most reliable), then click Next as fallback
+                        try:
+                            await loc.press("Enter", delay=random.randint(100, 300))
+                            logger.info("chatgpt_login: pressed Enter on email field")
+                        except Exception:
+                            pass
+                        await asyncio.sleep(random.uniform(0.3, 0.5))
+                        clicked = await _safe_click(
+                            pg,
+                            'button:has-text("Next")',
+                            'button:has-text("Tiếp theo")',
+                            'span[jsname="V67aGc"]',
+                            '#identifierNext',
+                            'button[jsname="LgbsSe"]:visible',
+                            'div[role="button"]:has-text("Next")',
+                            'div[role="button"]:has-text("Tiếp theo")',
+                        )
+                        if not clicked:
+                            try:
+                                await pg.evaluate("""() => {
+                                    const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                                    for (const el of all) {
+                                        if (!el.offsetParent) continue;
+                                        const t = (el.innerText || '').trim().toLowerCase();
+                                        if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                                            el.click();
+                                            return;
+                                        }
+                                    }
+                                }""")
+                            except Exception:
+                                pass
+                        logger.info("chatgpt_login: submitted email, clicked=%s", clicked)
+                        break
+
+                if not email_filled:
+                    logger.info("chatgpt_login: waiting for email input to appear...")
+                    for pg in page.context.pages:
+                        try:
+                            if pg.is_closed():
+                                continue
+                        except Exception:
+                            continue
+                        for sel in ('input[type="email"]', 'input[name="identifier"]', '#identifierId'):
+                            try:
+                                loc = pg.locator(sel).first
+                                await loc.wait_for(state="visible", timeout=15_000)
+                                await loc.click(timeout=3000)
+                                await asyncio.sleep(random.uniform(0.2, 0.4))
+                                await loc.fill(session.email)
+                                await asyncio.sleep(random.uniform(0.3, 0.6))
+                                email_filled = True
+                                logger.info("chatgpt_login: filled email via wait+%s", sel)
+                                break
+                            except Exception:
+                                continue
+                        if email_filled:
+                            await asyncio.sleep(random.uniform(0.5, 1.0))
+                            try:
+                                await loc.press("Enter", delay=random.randint(100, 300))
+                                logger.info("chatgpt_login: pressed Enter on email (wait path)")
+                            except Exception:
+                                pass
+                            await asyncio.sleep(random.uniform(0.3, 0.5))
+                            clicked = await _safe_click(
+                                pg,
+                                'button:has-text("Next")',
+                                'button:has-text("Tiếp theo")',
+                                'span[jsname="V67aGc"]',
+                                '#identifierNext',
+                                'button[jsname="LgbsSe"]:visible',
+                                'div[role="button"]:has-text("Next")',
+                                'div[role="button"]:has-text("Tiếp theo")',
+                            )
+                            if not clicked:
+                                try:
+                                    await pg.evaluate("""() => {
+                                        const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                                        for (const el of all) {
+                                            if (!el.offsetParent) continue;
+                                            const t = (el.innerText || '').trim().toLowerCase();
+                                            if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                                                el.click();
+                                                return;
+                                            }
+                                        }
+                                    }""")
+                                except Exception:
+                                    pass
+                            logger.info("chatgpt_login: submitted email (wait path), clicked=%s", clicked)
+                            break
+
+                if not email_filled:
+                    for pg in page.context.pages:
+                        try:
+                            if pg.is_closed():
+                                continue
+                        except Exception:
+                            continue
+                        try:
+                            url = pg.url or "?"
+                            body = await pg.locator("body").inner_text(timeout=3000)
+                            logger.error("chatgpt_login: PAGE BODY url=%s body_first_500=%s", url[:120], body[:500])
+                        except Exception as exc:
+                            logger.error("chatgpt_login: body read failed url=%s err=%s", getattr(pg, "url", "?"), exc)
+                    logger.error("chatgpt_login: email input not found after waiting!")
+                    session.state = "failed"
+                    session.error = "Google khong hien thi o email — co the trinh duyet bi chan"
+                    return
 
             # ── Step 5: Google login (password) ──
-            await asyncio.sleep(2.5)
+            await asyncio.sleep(3.0)
             session.message = "Dang nhap mat khau..."
 
+            # Debug: log what page Google shows after email
+            for pg in page.context.pages:
+                try:
+                    if pg.is_closed():
+                        continue
+                except Exception:
+                    continue
+                try:
+                    url = pg.url or "?"
+                    title = await pg.title() or ""
+                    body = (await pg.locator("body").inner_text(timeout=2000))[:400]
+                    logger.info("chatgpt_login: after email submit, url=%s title=%r body=%s", url[:120], title[:80], body[:300])
+                except Exception:
+                    pass
+
+            pw_filled = False
+            _PW_SELECTORS = (
+                'input[type="password"]',
+                'input[name="Passwd"]',
+                'input[name="password"]',
+                'input[autocomplete="current-password"]',
+                '#password input[type="password"]',
+            )
             for pg in page.context.pages:
                 try:
                     if pg.is_closed():
@@ -453,36 +1038,114 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                 except Exception:
                     continue
 
-                pw_filled = False
-                pw_selectors = (
-                    'input[type="password"]',
-                    'input[name="Passwd"]',
-                    '#password input[type="password"]',
-                )
-                for sel in pw_selectors:
+                # Wait for password field to appear (Google v3 transitions take time)
+                for sel in _PW_SELECTORS:
                     try:
                         loc = pg.locator(sel).first
-                        if await loc.count() > 0:
-                            await loc.click(timeout=3000)
-                            await loc.fill("")
-                            await asyncio.sleep(random.uniform(0.2, 0.5))
-                            await _type_human_like(loc, password)
-                            pw_filled = True
-                            logger.info("chatgpt_login: filled password")
-                            break
+                        await loc.wait_for(state="visible", timeout=20_000)
+                        await loc.click(timeout=3000)
+                        await asyncio.sleep(random.uniform(0.3, 0.5))
+                        await loc.fill(password)
+                        await asyncio.sleep(random.uniform(0.3, 0.6))
+                        pw_filled = True
+                        logger.info("chatgpt_login: filled password via wait+%s", sel)
+                        break
                     except Exception:
                         continue
 
                 if pw_filled:
-                    await asyncio.sleep(0.3)
-                    await _safe_click(
+                    await asyncio.sleep(random.uniform(0.3, 0.7))
+                    clicked = await _safe_click(
                         pg,
                         'button:has-text("Next")',
                         'button:has-text("Tiếp theo")',
                         '#passwordNext',
                         'button[jsname="LgbsSe"]:visible',
+                        'div[role="button"]:has-text("Next")',
+                        'div[role="button"]:has-text("Tiếp theo")',
                     )
+                    if not clicked:
+                        try:
+                            await pg.evaluate("""() => {
+                                const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                                for (const el of all) {
+                                    if (!el.offsetParent) continue;
+                                    const t = (el.innerText || '').trim().toLowerCase();
+                                    if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                                        el.click();
+                                        return;
+                                    }
+                                }
+                            }""")
+                        except Exception:
+                            pass
+                    try:
+                        await loc.press("Enter", delay=random.randint(100, 300))
+                    except Exception:
+                        pass
+                    logger.info("chatgpt_login: submitted password, clicked=%s", clicked)
                     break
+
+            if not pw_filled:
+                # Try waiting for password input
+                logger.info("chatgpt_login: waiting for password input...")
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    for sel in ('input[type="password"]', 'input[name="Passwd"]'):
+                        try:
+                            loc = pg.locator(sel).first
+                            await loc.wait_for(state="visible", timeout=15_000)
+                            await loc.click(timeout=3000)
+                            await asyncio.sleep(random.uniform(0.2, 0.4))
+                            await loc.fill(password)
+                            await asyncio.sleep(random.uniform(0.3, 0.6))
+                            pw_filled = True
+                            logger.info("chatgpt_login: filled password via wait+%s", sel)
+                            break
+                        except Exception:
+                            continue
+                    if pw_filled:
+                        await asyncio.sleep(random.uniform(0.3, 0.7))
+                        clicked = await _safe_click(
+                            pg,
+                            'button:has-text("Next")',
+                            'button:has-text("Tiếp theo")',
+                            '#passwordNext',
+                            'button[jsname="LgbsSe"]:visible',
+                            'div[role="button"]:has-text("Next")',
+                            'div[role="button"]:has-text("Tiếp theo")',
+                        )
+                        if not clicked:
+                            try:
+                                await pg.evaluate("""() => {
+                                    const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                                    for (const el of all) {
+                                        if (!el.offsetParent) continue;
+                                        const t = (el.innerText || '').trim().toLowerCase();
+                                        if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                                            el.click();
+                                            return;
+                                        }
+                                    }
+                                }""")
+                            except Exception:
+                                pass
+                        try:
+                            await loc.press("Enter", delay=random.randint(100, 300))
+                        except Exception:
+                            pass
+                        logger.info("chatgpt_login: submitted password (wait path), clicked=%s", clicked)
+                        break
+
+            if not pw_filled:
+                logger.error("chatgpt_login: password input not found!")
+                session.state = "failed"
+                session.error = "Google khong hien thi o mat khau — co the trinh duyet bi chan"
+                return
 
             # ── Step 6: Handle 2FA if needed ──
             session.elapsed_sec = time.time() - started_at
@@ -515,13 +1178,42 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                     except Exception:
                         continue
 
-                    # Auto-pick Authenticator — only ONCE per session
-                    if not auth_picked and await _pick_authenticator_method(pg):
-                        auth_picked = True
-                        session.message = "Da chon Google Authenticator, dang cho code..."
-                        logger.info("chatgpt_login: auto-picked Authenticator")
-                        await asyncio.sleep(3.0)
-                        continue
+                    # Auto-pick Authenticator — only ONCE per session.
+                    # Google v3 defaults to phone prompt. If Authenticator isn't
+                    # visible in the method list, click "Try another way" to
+                    # reveal it, then try picking Authenticator again.
+                    if not auth_picked:
+                        picked = await _pick_authenticator_method(pg)
+                        if not picked:
+                            # Authenticator not visible — try expanding the list
+                            try_another_way_selectors = (
+                                'button:has-text("Try another way")',
+                                'button:has-text("Thử cách khác")',
+                                'a:has-text("Try another way")',
+                                'a:has-text("Thử cách khác")',
+                                'span:has-text("Try another way")',
+                                'span:has-text("Thử cách khác")',
+                                'div[role="button"]:has-text("Try another way")',
+                                'div[role="button"]:has-text("Thử cách khác")',
+                            )
+                            for tsel in try_another_way_selectors:
+                                try:
+                                    tloc = pg.locator(tsel).first
+                                    if await tloc.count() > 0 and await tloc.is_visible(timeout=500):
+                                        await tloc.click(timeout=3000)
+                                        logger.info("chatgpt_login: clicked Try another way via %s", tsel)
+                                        await asyncio.sleep(3.0)
+                                        break
+                                except Exception:
+                                    continue
+                            # Try picking Authenticator again after expanding
+                            picked = await _pick_authenticator_method(pg)
+                        if picked:
+                            auth_picked = True
+                            session.message = "Da chon Google Authenticator, dang cho code..."
+                            logger.info("chatgpt_login: auto-picked Authenticator")
+                            await asyncio.sleep(3.0)
+                            continue
 
                     # Detect phone tap prompt
                     try:
@@ -625,8 +1317,75 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                         except Exception:
                             continue
 
+            # ── Step 6.5: If we only logged into accounts.google.com
+            #    (not via OAuth redirect), navigate back to auth.openai.com
+            #    so Auth0 can detect the Google session and complete the
+            #    ChatGPT OAuth flow with proper consent screen. ──
+            session.elapsed_sec = time.time() - started_at
+            if not _google_oauth_used:
+                # Check if Google login succeeded (cookies present) but we're
+                # NOT on chatgpt.com yet — meaning OAuth wasn't triggered.
+                on_chatgpt = False
+                for pg in page.context.pages:
+                    try:
+                        if pg.is_closed():
+                            continue
+                    except Exception:
+                        continue
+                    if "chatgpt.com" in (pg.url or "") and "auth" not in (pg.url or ""):
+                        on_chatgpt = True
+                        break
+                if not on_chatgpt:
+                    session.message = "Dang quay lai auth.openai.com de hoan tat OAuth..."
+                    logger.info("chatgpt_login: accounts.google.com login OK, navigating to auth.openai.com for OAuth")
+                    try:
+                        oauth_page = page
+                        await oauth_page.goto(_AUTH0_LOGIN_URL, wait_until="domcontentloaded", timeout=30_000)
+                        await asyncio.sleep(3.0)
+                        # Find and click "Continue with Google" — Auth0 should
+                        # now auto-detect the Google session and skip to consent.
+                        google_clicked = False
+                        for sel in _GOOGLE_BTN_SELECTORS:
+                            try:
+                                loc = oauth_page.locator(sel).first
+                                if await loc.count() > 0:
+                                    await loc.click(timeout=5_000)
+                                    google_clicked = True
+                                    logger.info("chatgpt_login: post-login Google OAuth click via %s", sel)
+                                    break
+                            except Exception:
+                                continue
+                        if not google_clicked:
+                            # JS fallback
+                            try:
+                                await oauth_page.evaluate("""() => {
+                                    const all = document.querySelectorAll('button, a, div[role="button"]');
+                                    for (const el of all) {
+                                        if (!el.offsetParent) continue;
+                                        const t = (el.innerText || el.getAttribute('aria-label') || '').toLowerCase();
+                                        const h = el.getAttribute('href') || '';
+                                        if (t.includes('google') || h.includes('accounts.google.com')) {
+                                            el.click();
+                                            return 'clicked';
+                                        }
+                                    }
+                                    return null;
+                                }""")
+                                google_clicked = True
+                                logger.info("chatgpt_login: post-login Google OAuth via JS fallback")
+                            except Exception:
+                                pass
+                        if google_clicked:
+                            session.message = "Da click Google OAuth, dang cho redirect..."
+                            logger.info("chatgpt_login: post-login OAuth triggered, waiting for chatgpt.com redirect")
+                        else:
+                            logger.warning("chatgpt_login: post-login Google button still not found, waiting anyway...")
+                    except Exception as exc:
+                        logger.warning("chatgpt_login: post-login OAuth navigation failed: %s", exc)
+
             # ── Step 7: Wait for redirect back to chatgpt.com ──
             session.elapsed_sec = time.time() - started_at
+            _chatgpt_verify_reported = False
             for _ in range(20):  # up to ~60s
                 await asyncio.sleep(3.0)
                 session.elapsed_sec = time.time() - started_at
@@ -637,11 +1396,35 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
                     except Exception:
                         continue
                     url = pg.url or ""
-                    if "chatgpt.com" in url and "auth" not in url:
+
+                    # ── Detect ChatGPT email verification page ──
+                    # After Google login, ChatGPT may require a one-time code sent
+                    # to the account email. This is different from Google 2FA.
+                    if not _chatgpt_verify_reported:
+                        try:
+                            body = (await pg.locator("body").inner_text(timeout=1000)).lower()
+                            _chatgpt_verify_hints = (
+                                "verification code", "mã xác minh",
+                                "check your email", "kiểm tra email",
+                                "we sent a code", "chúng tôi đã gửi",
+                                "enter the code", "nhập mã",
+                                "verify your email", "xác minh email",
+                                "one-time code", "mã dùng một lần",
+                            )
+                            if any(h in body for h in _chatgpt_verify_hints):
+                                logger.warning("chatgpt_login: ChatGPT verification page detected! body_snippet=%s", body[:300])
+                                session.state = "need_code"
+                                session.message = "ChatGPT yeu cau ma xac minh email — nhap ma tu email"
+                                _chatgpt_verify_reported = True
+                                break
+                        except Exception:
+                            pass
+
+                    if "chatgpt.com" in url and "auth" not in url and session.state != "need_code":
                         session.state = "success"
                         session.message = "Da redirect ve chatgpt.com"
                         break
-                if session.state == "success":
+                if session.state in ("success", "need_code"):
                     break
 
             # ── Step 8: Scrape JWT token ──

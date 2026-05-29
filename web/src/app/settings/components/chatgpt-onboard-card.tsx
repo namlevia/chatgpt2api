@@ -227,8 +227,16 @@ export function ChatGPTOnboardCard() {
         }
         // 3) POST token to chatgpt2api accounts pool
         try {
+          const label = s.captured_email || profile;
           await request.post("/api/accounts", { tokens: [s.access_token] });
-          toast.success(`Đã thêm account ${s.captured_email} vào pool 🎉`);
+          // Tag the account with the Google login email so it's identifiable
+          try {
+            await request.post("/api/accounts/update", {
+              access_token: s.access_token,
+              type: `free,${label?.split("@")[0] || profile}`,
+            });
+          } catch { /* tag update is best-effort */ }
+          toast.success(`Đã thêm account ${label} vào pool`);
           setDraft({ email: "", password: "", code: "", totpSecret: "" });
         } catch (e: any) {
           toast.error(`Add to pool fail: ${e?.message || e}`);
@@ -392,7 +400,7 @@ export function ChatGPTOnboardCard() {
               value={draft.totpSecret}
               onChange={(e) => setDraft({ ...draft, totpSecret: e.target.value })}
               placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
-              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
+              className="mt-1 h-8 rounded-lg border-blue-200 text-xs font-mono"
               autoComplete="off"
               disabled={running}
             />

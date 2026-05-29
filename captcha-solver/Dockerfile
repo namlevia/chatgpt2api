@@ -13,6 +13,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     MOZ_DISABLE_GMP_SANDBOX=1
 
 # System deps: chromium runtime libs + Xvfb + x11vnc + websockify (noVNC)
+# + extra fonts to avoid bot-detection in minimal Linux environments
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ca-certificates wget curl gnupg \
         xvfb x11vnc supervisor fluxbox \
@@ -22,6 +23,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libdrm2 libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 \
         libxrandr2 libgbm1 libpango-1.0-0 libcairo2 libasound2 \
         libatspi2.0-0 libxshmfence1 fonts-noto-cjk fonts-liberation \
+        # Extra fonts — CloakBrowser / anti-bot fingerprinting needs these
+        fonts-noto-color-emoji fonts-freefont-ttf fonts-unifont \
     && rm -rf /var/lib/apt/lists/*
 
 # Install real Google Chrome — Patchright's stealth patches work best on top
@@ -37,10 +40,12 @@ WORKDIR /app
 COPY requirements.txt /app/requirements.txt
 RUN pip install -r requirements.txt
 
-# Install browsers: patchright Chromium (stealth) + Firefox (bypasses
+# Install browsers: patchright Chromium (stealth fallback) + Firefox (bypasses
 # Google Safe Browsing "unsafe browser" block on VPS IPs).
+# CloakBrowser pre-downloads its stealth Chromium during build.
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN patchright install chromium && patchright install firefox
+RUN python -m cloakbrowser install
 
 COPY src /app/src
 COPY supervisord.conf /etc/supervisor/conf.d/captcha-solver.conf
