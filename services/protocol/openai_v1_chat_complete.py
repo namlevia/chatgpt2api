@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import re
 import time
@@ -88,6 +89,22 @@ def completion_response(
             "total_tokens": prompt_tokens + completion_tokens,
         },
     }
+
+
+def _prefetch_stream(gen: Iterator[dict[str, Any]], error_msg: str) -> Iterator[dict[str, Any]]:
+    """Pre-fetch first element from a stream generator so auth/connection
+    errors are raised synchronously inside the caller's try/except block.
+
+    Without this, lazy generators from stream_text_chat_completion /
+    _stream_chatgpt_addon would raise errors only when iterated by
+    _wrap_mcp_stream, which silently catches exceptions and returns an
+    empty SSE stream — the client sees a 200 OK with no data.
+    """
+    try:
+        first = next(gen)
+    except StopIteration:
+        raise RuntimeError(error_msg)
+    return itertools.chain([first], gen)
 
 
 def stream_text_chat_completion(backend, messages: list[dict[str, Any]], model: str, tools: list[dict[str, Any]] | None = None, tool_choice: Any = None) -> Iterator[dict[str, Any]]:
@@ -469,7 +486,9 @@ def _wrap_mcp_stream(
                 tc = delta.get("tool_calls")
                 if tc:
                     final_tool_calls = tc
-    except Exception:
+    except Exception as exc:
+        logger.error({"event": "mcp_stream_error", "error": str(exc)[:300],
+                       "chunks_collected": len(chunks)})
         for c in chunks:
             yield c
         return
@@ -973,7 +992,7 @@ def _handle_chatgpt_chat(
             break
         try:
             return _try_chatgpt_with_token(
-                token, model, messages, tools, tool_choice, body, preferred_type, route
+                token, model, messages, tools, tool_choice, body, preferred_type, route, stream
             )
         except RuntimeError as exc:
             err_msg = str(exc).lower()
@@ -1061,11 +1080,10 @@ def _try_chatgpt_with_token(
     body: dict[str, Any],
     preferred_type: str | None,
     route=None,
+    stream: bool = False,
 ) -> dict[str, Any] | Iterator[dict[str, Any]]:
     """Single-attempt body extracted from _handle_chatgpt_chat for the rotate-on-quota loop."""
     from services.account_service import detect_token_audience, _TOKEN_AUDIENCE_OPENAI_API, _TOKEN_AUDIENCE_CHATGPT
-
-    stream = bool(body.get("stream"))
     is_openai_api = False
     is_codex = False
     if token:
@@ -1140,7 +1158,6 @@ def _try_chatgpt_with_token(
             openai_model = model
         if openai_model.startswith("chatgpt/"):
             openai_model = openai_model[len("chatgpt/"):]
-        stream = bool(body.get("stream"))
 
         messages = _restore_tool_messages(messages)
         messages = _convert_images_for_openai(messages)
@@ -1167,7 +1184,8 @@ def _try_chatgpt_with_token(
     if _IS_ADDON:
         # Addon: XML tool call parsing + force hint for HA
         if stream:
-            return _stream_chatgpt_addon(backend, messages, model, tools, tool_choice)
+            gen = _stream_chatgpt_addon(backend, messages, model, tools, tool_choice)
+            return _prefetch_stream(gen, "chatgpt.com addon stream failed — token may be invalid")
         return _chatgpt_addon_completion(model, messages, tools, tool_choice)
 
     # Docker + chatgpt.com free: HA only waits for ONE HTTP response, so we
@@ -1177,7 +1195,8 @@ def _try_chatgpt_with_token(
     messages = _prefetch_ha_context_if_needed(messages, tools, token)
 
     if stream:
-        return stream_text_chat_completion(backend, messages, model, tools, tool_choice)
+        gen = stream_text_chat_completion(backend, messages, model, tools, tool_choice)
+        return _prefetch_stream(gen, "chatgpt.com backend stream failed — token may be invalid")
     request = ConversationRequest(model=model, messages=messages, tools=tools, tool_choice=tool_choice)
     return completion_response(model, collect_text(backend, request), messages=messages)
 
