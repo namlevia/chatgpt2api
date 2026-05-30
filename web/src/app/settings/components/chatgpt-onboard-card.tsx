@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState, useCallback } from "react";
-import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink, Shield, Eye, EyeOff, RefreshCw, Timer } from "lucide-react";
+import { LoaderCircle, KeyRound, Sparkles, Smartphone, X, ExternalLink, Shield, Eye, EyeOff, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -48,42 +48,6 @@ export function ChatGPTOnboardCard() {
   const [isSavingAccount, setIsSavingAccount] = useState(false);
   const [savedRefreshKey, setSavedRefreshKey] = useState(0);
 
-  // ── Auto-refresh state ──
-  const [autoRefreshRunning, setAutoRefreshRunning] = useState(false);
-  const [refreshInterval, setRefreshInterval] = useState(30);
-
-  async function checkAutoRefreshStatus() {
-    try {
-      const res = await fetch(`${cs.url}/v1/chatgpt/auto-refresh/status`, {
-        headers: { Authorization: `Bearer ${cs.apiKey}` },
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setAutoRefreshRunning(data.running);
-      }
-    } catch { /* ignore */ }
-  }
-
-  async function toggleAutoRefresh() {
-    try {
-      if (autoRefreshRunning) {
-        await fetch(`${cs.url}/v1/chatgpt/auto-refresh/stop`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${cs.apiKey}` },
-        });
-        setAutoRefreshRunning(false);
-        toast.success("Đã dừng auto-refresh");
-      } else {
-        await fetch(`${cs.url}/v1/chatgpt/auto-refresh/start?interval_minutes=${refreshInterval}`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${cs.apiKey}` },
-        });
-        setAutoRefreshRunning(true);
-        toast.success(`Auto-refresh mỗi ${refreshInterval} phút`);
-      }
-    } catch { toast.error("Lỗi auto-refresh"); }
-  }
-
   async function refreshNow() {
     if (!draft.email.trim()) {
       toast.error("Chọn tài khoản trước");
@@ -103,11 +67,6 @@ export function ChatGPTOnboardCard() {
       }
     } catch { toast.error("Lỗi gọi refresh"); }
   }
-
-  // Check auto-refresh status on mount
-  useEffect(() => {
-    void checkAutoRefreshStatus();
-  }, []);
 
   // Auto-refresh TOTP code when secret is provided
   const refreshTotp = useCallback(async (secret: string) => {
@@ -394,7 +353,7 @@ export function ChatGPTOnboardCard() {
           </div>
           <div>
             <label className="text-[11px] text-stone-500 flex items-center gap-1">
-              <Shield className="size-3" /> TOTP Secret (Authenticator — bỏ qua dấu cách, tự sinh mã khi bật)
+              <Shield className="size-3" /> TOTP Secret — để TRỐNG = xác minh qua thiết bị (tap điện thoại); điền secret = Authenticator tự sinh mã
             </label>
             <Input
               value={draft.totpSecret}
@@ -455,36 +414,6 @@ export function ChatGPTOnboardCard() {
               >
                 <X className="size-3.5" /> Đóng phiên
               </Button>
-            )}
-          </div>
-
-          {/* Auto-refresh controls */}
-          <div className="flex items-center gap-2 pt-1 border-t border-blue-200/50">
-            <Timer className="size-3.5 text-purple-600" />
-            <span className="text-[11px] text-stone-600">Auto-refresh token:</span>
-            <button
-              onClick={toggleAutoRefresh}
-              className={`px-2 py-0.5 rounded text-[10px] font-semibold transition-colors ${
-                autoRefreshRunning
-                  ? "bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
-                  : "bg-stone-100 text-stone-500 hover:bg-stone-200"
-              }`}
-            >
-              {autoRefreshRunning ? "ON" : "OFF"}
-            </button>
-            {!autoRefreshRunning && (
-              <>
-                <span className="text-[10px] text-stone-400">mỗi</span>
-                <input
-                  type="number"
-                  value={refreshInterval}
-                  onChange={(e) => setRefreshInterval(Math.max(5, Math.min(120, Number(e.target.value))))}
-                  className="w-12 h-6 rounded border border-stone-200 text-center text-[10px]"
-                  min={5}
-                  max={120}
-                />
-                <span className="text-[10px] text-stone-400">phút</span>
-              </>
             )}
           </div>
 
