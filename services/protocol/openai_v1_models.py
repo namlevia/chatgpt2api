@@ -723,14 +723,11 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
         if mid not in seen:
             seen.add(mid)
             data.append({"id": mid, "object": "model", "created": 0, "owned_by": "chatgpt_free"})
-    # Backwards-compat chatgpt/* aliases (route to the free module).
-    openai_extra = ["chatgpt/auto",
-                    "chatgpt/gpt-4o", "chatgpt/gpt-4o-mini", "chatgpt/gpt-4.1-mini",
-                    "chatgpt/gpt-4.1-nano", "chatgpt/o3-mini", "chatgpt/o4-mini"]
-    for mid in openai_extra:
-        if mid not in seen:
-            seen.add(mid)
-            data.append({"id": mid, "object": "model", "created": 0, "owned_by": "chatgpt"})
+    # NOTE: the legacy `chatgpt/*` group is intentionally NOT listed anymore —
+    # it was a duplicate of `free/*` (same module, same free pool). The
+    # `chatgpt/` prefix still ROUTES (backend_router maps it to the free
+    # module) so existing HA / n8n / saved combos calling `chatgpt/auto` keep
+    # working; we just don't surface it as a second identical group.
     # Paid (Codex) + OpenAI-API entry points.
     for mid, owner in [("paid/auto", "openai_oauth"), ("oai/auto", "openai_api")]:
         if mid not in seen:
