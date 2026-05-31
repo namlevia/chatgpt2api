@@ -709,25 +709,20 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                         "owned_by": provider_name,
                     })
 
-    # Expose the canonical routing prefixes so HA / SDK dropdowns and
-    # combo-model pickers can see each independent pool:
-    #  - free/* → standalone free module (chatgpt.com web, free pool only)
+    # Unified ChatGPT_free provider — ONE group under prefix cgf/. Merges the
+    # old chatgpt/* and free/* lists (same module, same free pool) into one.
+    # free/, chatgpt/, chatgpt/free/ still ROUTE as hidden aliases
+    # (backend_router) so HA / n8n / saved combos keep working — not listed.
     #  - paid/auto → plus/go/business unified under Codex (also cx/ , codex/)
-    #  - oai/auto → raw OpenAI API (sk-/standard) — 3rd separate path
-    #  - chatgpt/* → kept as a backwards-compatible alias for free/* so
-    #    existing HA / n8n / saved combos don't break.
-    free_models = ["free/auto",
-                   "free/gpt-4o", "free/gpt-4o-mini", "free/gpt-4.1-mini",
-                   "free/gpt-4.1-nano", "free/o3-mini", "free/o4-mini"]
-    for mid in free_models:
+    #  - oai/auto  → raw OpenAI API (sk-/standard)
+    cgf_models = ["cgf/auto",
+                  "cgf/gpt-4o", "cgf/gpt-4o-mini", "cgf/gpt-4.1-mini",
+                  "cgf/gpt-4.1-nano", "cgf/o3-mini", "cgf/o4-mini",
+                  "cgf/gpt-5-5", "cgf/gpt-5-mini"]
+    for mid in cgf_models:
         if mid not in seen:
             seen.add(mid)
-            data.append({"id": mid, "object": "model", "created": 0, "owned_by": "chatgpt_free"})
-    # NOTE: the legacy `chatgpt/*` group is intentionally NOT listed anymore —
-    # it was a duplicate of `free/*` (same module, same free pool). The
-    # `chatgpt/` prefix still ROUTES (backend_router maps it to the free
-    # module) so existing HA / n8n / saved combos calling `chatgpt/auto` keep
-    # working; we just don't surface it as a second identical group.
+            data.append({"id": mid, "object": "model", "created": 0, "owned_by": "ChatGPT_free"})
     # Paid (Codex) + OpenAI-API entry points.
     for mid, owner in [("paid/auto", "openai_oauth"), ("oai/auto", "openai_api")]:
         if mid not in seen:
