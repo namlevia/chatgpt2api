@@ -20,10 +20,11 @@ from utils.helper import IMAGE_MODELS
 # Provider prefixes ported from 9router src/shared/constants/providers.js
 PROVIDER_PREFIXES: dict[str, str] = {
     "9r/": "ninerouter",
-    "free/": "chatgpt_free",   # standalone free-tier module (chatgpt.com web)
+    "cgf/": "chatgpt_free",   # CANONICAL ChatGPT_free prefix (chatgpt.com web, free pool)
+    "free/": "chatgpt_free",   # alias of cgf/
     "chatgpt/codex/": "openai_oauth",  # legacy alias — keep BEFORE chatgpt/
     "chatgpt/free/": "chatgpt_free",   # legacy alias — keep BEFORE chatgpt/
-    "chatgpt/": "chatgpt",
+    "chatgpt/": "chatgpt_free",   # legacy alias → unified free module
     "paid/": "openai_oauth",   # plus/go/business — unified under Codex OAuth
     "cx/": "openai_oauth",
     "codex/": "openai_oauth",

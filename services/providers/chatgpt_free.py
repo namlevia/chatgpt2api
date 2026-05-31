@@ -54,7 +54,7 @@ def _normalize_free_model(model: str) -> str:
     bare names like `gpt-4o` are left exactly as the old free branch sent them.
     Empty → "auto"."""
     slug = str(model or "").strip()
-    for p in ("chatgpt/free/", "free/"):
+    for p in ("chatgpt/free/", "cgf/", "free/"):
         if slug.startswith(p):
             slug = slug[len(p):]
             break
