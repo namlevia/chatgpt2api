@@ -160,9 +160,13 @@ def handle_free_chat(
     messages = _normalize_tool_messages(messages)
     model = _normalize_free_model(model)
     # cgf/auto → round-robin a concrete enabled model (spread free quota across
-    # models). Only the free entry point rotates; call_chatgpt_web (codex paid
-    # fallback) keeps its own model untouched. Empty pool → ChatGPT native auto.
-    if model == "auto":
+    # models). BUT only for plain chat: tool-bearing requests (Home Assistant
+    # sends GetLiveContext / HassTurnOn etc.) MUST keep a capable model — weak
+    # models like gpt-4o-mini / *-mini don't reliably emit/honor tool calls, so
+    # HA would answer generically instead of reading device state. For those we
+    # keep "auto" → ChatGPT's own picker (GPT-5 class). Only the free entry
+    # rotates; call_chatgpt_web (codex paid fallback) is untouched.
+    if model == "auto" and not tools:
         model = _pick_rotating_free_model()
 
     # Retry loop: when an account 429/quota-burns or expires, rotate to the
