@@ -78,11 +78,19 @@ _rr_index = 0
 _AUTO_ROTATE_EXCLUDE = {"auto", "research"}
 
 
+_FREE_PREFIXES = ("chatgpt/free/", "cgf/", "free/")
+
+
 def _enabled_free_models() -> list[str]:
-    """Enabled cgf/* model slugs (prefix stripped, deduped, sorted for a stable
-    round-robin order). Robust to the chatgpt_free / ChatGPT_free key-casing
-    split — gathers any enabled id under the free prefixes across every provider
-    key, since the /v1/models enabled-filter flattens them anyway."""
+    """Enabled FREE model slugs ONLY (ids under cgf/ , free/ , chatgpt/free/),
+    prefix stripped, deduped, sorted for a stable round-robin order.
+
+    CRITICAL: ids WITHOUT a free prefix (cx/ codex, gemini*/, deepseek/, flow/
+    images, cgw/ chatgpt-web, combo names like "AI Agent", ...) are NOT free-pool
+    models and MUST be skipped — otherwise cgf/auto rotates into other providers'
+    models and forwards a bogus model name to chatgpt.com. (Robust to the
+    chatgpt_free / ChatGPT_free key-casing split since we scan every key but
+    filter by prefix.)"""
     ms = config.data.get("model_settings") or {}
     enabled = ms.get("enabled_models") or {}
     slugs: set[str] = set()
@@ -94,12 +102,15 @@ def _enabled_free_models() -> list[str]:
                 if not isinstance(mid, str):
                     continue
                 m = mid.strip()
-                for p in ("chatgpt/free/", "cgf/", "free/", "chatgpt/"):
+                stripped: str | None = None
+                for p in _FREE_PREFIXES:
                     if m.startswith(p):
-                        m = m[len(p):]
+                        stripped = m[len(p):]
                         break
-                if m and m not in _AUTO_ROTATE_EXCLUDE:
-                    slugs.add(m)
+                if stripped is None:
+                    continue  # not a free-pool model — skip
+                if stripped and stripped not in _AUTO_ROTATE_EXCLUDE:
+                    slugs.add(stripped)
     return sorted(slugs)
 
 
