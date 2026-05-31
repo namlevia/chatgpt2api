@@ -639,7 +639,11 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
 
     # Fetch from all built-in providers in parallel
     provider_fetchers = {
-        "chatgpt": _fetch_chatgpt_token_models,
+        # NOTE: the dynamic "chatgpt" group is intentionally NOT listed here.
+        # ChatGPT free is exposed ONLY under the unified cgf/ group (built from
+        # the hardcoded cgf_models list below, owned_by "ChatGPT_free"). The
+        # free pool / chatgpt.com transport is unchanged — this only controls
+        # what /v1/models advertises so the UI shows a single ChatGPT_free group.
         "openai_oauth": _fetch_codex_models,
         "gemini_free": _fetch_gemini_models,
         "opencode": _fetch_opencode_models,
@@ -697,7 +701,7 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                 })
 
     # Apply fallbacks for providers that returned nothing
-    for provider_name in ["opencode", "gemini_free", "chatgpt", "openai_oauth", "nvidia_nim", "chatgpt2api", "antigravity", "gemini_web"]:
+    for provider_name in ["opencode", "gemini_free", "openai_oauth", "nvidia_nim", "chatgpt2api", "antigravity", "gemini_web"]:
         if provider_name not in all_models:
             for model_id in sorted(_apply_fallback(provider_name)):
                 if model_id not in seen:
@@ -716,9 +720,13 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
     #  - paid/auto → plus/go/business unified under Codex (also cx/ , codex/)
     #  - oai/auto  → raw OpenAI API (sk-/standard)
     cgf_models = ["cgf/auto",
+                  # GPT-5 family (full chatgpt.com web line-up)
+                  "cgf/gpt-5", "cgf/gpt-5-1", "cgf/gpt-5-2", "cgf/gpt-5-3",
+                  "cgf/gpt-5-3-mini", "cgf/gpt-5-4-t-mini", "cgf/gpt-5-5",
+                  "cgf/gpt-5-mini", "cgf/research",
+                  # legacy 4o / 4.1 / o-series
                   "cgf/gpt-4o", "cgf/gpt-4o-mini", "cgf/gpt-4.1-mini",
-                  "cgf/gpt-4.1-nano", "cgf/o3-mini", "cgf/o4-mini",
-                  "cgf/gpt-5-5", "cgf/gpt-5-mini"]
+                  "cgf/gpt-4.1-nano", "cgf/o3-mini", "cgf/o4-mini"]
     for mid in cgf_models:
         if mid not in seen:
             seen.add(mid)
