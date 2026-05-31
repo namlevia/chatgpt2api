@@ -20,6 +20,7 @@ fully loaded.
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Iterator
 
 from services.account_service import account_service
@@ -61,6 +62,61 @@ def _normalize_free_model(model: str) -> str:
     return slug or "auto"
 
 
+# ── cgf/auto round-robin (đại ca's choice "A", 2026-05-31) ────────────────────
+# cgf/auto no longer forwards the literal "auto" to chatgpt.com's own picker.
+# Instead it cycles through the *enabled* cgf/* models so free-tier quota is
+# spread across models (each request advances to the next model). Empty pool
+# → fall back to ChatGPT's native "auto".
+_rr_lock = threading.Lock()
+_rr_index = 0
+
+# Slugs kept OUT of the auto-rotation pool even when enabled:
+#   auto      — would recurse into itself.
+#   research  — chatgpt.com deep-research is a long-running job, not a normal
+#               chat model; rotating into it would randomly stall ~1/N requests
+#               on a multi-minute task. Still callable explicitly via cgf/research.
+_AUTO_ROTATE_EXCLUDE = {"auto", "research"}
+
+
+def _enabled_free_models() -> list[str]:
+    """Enabled cgf/* model slugs (prefix stripped, deduped, sorted for a stable
+    round-robin order). Robust to the chatgpt_free / ChatGPT_free key-casing
+    split — gathers any enabled id under the free prefixes across every provider
+    key, since the /v1/models enabled-filter flattens them anyway."""
+    ms = config.data.get("model_settings") or {}
+    enabled = ms.get("enabled_models") or {}
+    slugs: set[str] = set()
+    if isinstance(enabled, dict):
+        for vals in enabled.values():
+            if not isinstance(vals, list):
+                continue
+            for mid in vals:
+                if not isinstance(mid, str):
+                    continue
+                m = mid.strip()
+                for p in ("chatgpt/free/", "cgf/", "free/", "chatgpt/"):
+                    if m.startswith(p):
+                        m = m[len(p):]
+                        break
+                if m and m not in _AUTO_ROTATE_EXCLUDE:
+                    slugs.add(m)
+    return sorted(slugs)
+
+
+def _pick_rotating_free_model() -> str:
+    """Round-robin one concrete model for cgf/auto. Falls back to ChatGPT's own
+    "auto" picker when no concrete model is enabled."""
+    global _rr_index
+    models = _enabled_free_models()
+    if not models:
+        return "auto"
+    with _rr_lock:
+        pick = models[_rr_index % len(models)]
+        _rr_index += 1
+    logger.info({"event": "free_auto_rotate_model", "picked": pick, "pool": len(models)})
+    return pick
+
+
 def handle_free_chat(
     model: str,
     messages: list[dict[str, Any]],
@@ -92,6 +148,11 @@ def handle_free_chat(
 
     messages = _normalize_tool_messages(messages)
     model = _normalize_free_model(model)
+    # cgf/auto → round-robin a concrete enabled model (spread free quota across
+    # models). Only the free entry point rotates; call_chatgpt_web (codex paid
+    # fallback) keeps its own model untouched. Empty pool → ChatGPT native auto.
+    if model == "auto":
+        model = _pick_rotating_free_model()
 
     # Retry loop: when an account 429/quota-burns or expires, rotate to the
     # next free account. Non-quota errors re-raise immediately so real bugs
