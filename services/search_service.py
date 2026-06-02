@@ -495,6 +495,14 @@ class IntentRouter:
         "tu nhien": "kb_tu_nhien", "dong vat": "kb_tu_nhien", "thuc vat": "kb_tu_nhien",
         "xa hoi": "kb_xa_hoi", "lich su": "kb_xa_hoi", "van hoa": "kb_xa_hoi",
         "pccc": "kb_xa_hoi", "phap luat": "kb_xa_hoi",
+        # Natural phenomena / general science — multi-char keys to avoid
+        # collisions; routes these into the science KBs so the self-enriching
+        # loop can serve them once populated (e.g. "nguồn gốc sấm sét").
+        "sam set": "kb_tu_nhien", "khi tuong": "kb_tu_nhien", "khi hau": "kb_tu_nhien",
+        "nui lua": "kb_tu_nhien", "dong dat": "kb_tu_nhien", "thuy trieu": "kb_tu_nhien",
+        "cau vong": "kb_tu_nhien", "thien tai": "kb_tu_nhien",
+        "thien van": "kb_khoa_hoc", "vu tru": "kb_khoa_hoc", "hanh tinh": "kb_khoa_hoc",
+        "nguyen tu": "kb_khoa_hoc", "trong luc": "kb_khoa_hoc", "nang luong": "kb_khoa_hoc",
     }
 
     _WEATHER_KW = ["thoi tiet", "thời tiết", "nhiet do", "nhiệt độ", "du bao",
@@ -1012,23 +1020,22 @@ class SearchService:
 
         # --- Luong 3: Tim kiem trong Vector DB (Neu co collection hop le) ---
         def _call_rag(collection: str) -> tuple[str, list]:
+            # KB is queried through the per-collection MCP tool `ask_<suffix>`
+            # (kb_tu_nhien -> ask_tu_nhien). The old POST /api/rag/query endpoint
+            # never existed on vn-mcp-hub (404) and used the unresolvable
+            # `mcp_hub_url` default — so KB grounding silently returned nothing.
+            # ask_<> reaches the hub via the working mcp_servers URL and does the
+            # KB-first hybrid lookup (with its own live fallback when needed).
             try:
-                hub_url = config.data.get("mcp_hub_url", "http://vn-mcp-hub:8005")
-                import urllib.request, json
-                req = urllib.request.Request(
-                    f"{hub_url}/api/rag/query",
-                    data=json.dumps({"query": query, "collections": [collection], "limit": 3}).encode(),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                with urllib.request.urlopen(req, timeout=8) as r:
-                    data = json.loads(r.read())
-                    results = data.get("results") or []
-                    # Map vao format
-                    rag_results = [{"title": res.get("title", "KB"), "snippet": res.get("text", ""), "url": res.get("source", "")} for res in results]
-                    return "rag", rag_results
+                from services.mcp_client import call_mcp_tool
+                suffix = collection[3:] if collection.startswith("kb_") else collection
+                text = str(call_mcp_tool(f"ask_{suffix}", {"question": query}, server_id=collection) or "")
+                low = text.lower()
+                if not text or "chưa có dữ liệu" in low or "chưa sẵn sàng" in low:
+                    return "rag", []
+                return "rag", [{"title": f"[KB {suffix}]", "snippet": text[:3000], "url": ""}]
             except Exception as exc:
-                logger.debug("search_all: RAG %s skipped: %s", collection, exc)
+                logger.debug("search_all: KB %s skipped: %s", collection, exc)
                 return "rag", []
 
         # --- Thuc thi song song ca MCP, Backend va RAG cung luc ---
@@ -1094,7 +1101,20 @@ class SearchService:
         """Store a Q&A pair to vn-mcp-hub RAG. Best-effort, non-blocking."""
         if not response or len(response) < 50:
             return False
-        hub_url = config.data.get("mcp_hub_url", "http://vn-mcp-hub:8005")
+        hub_url = config.data.get("mcp_hub_url")
+        if not hub_url:
+            # mcp_hub_url is usually unset -> derive the hub origin from any
+            # configured MCP server URL (…/<server>/mcp) so curate POSTs reach
+            # the real host instead of the unresolvable "vn-mcp-hub" default.
+            from urllib.parse import urlparse
+            for _v in (config.data.get("mcp_servers") or {}).values():
+                _u = _v.get("url") if isinstance(_v, dict) else _v
+                if _u and "/mcp" in str(_u):
+                    _p = urlparse(str(_u))
+                    hub_url = f"{_p.scheme}://{_p.netloc}"
+                    break
+            hub_url = hub_url or "http://vn-mcp-hub:8005"
+        hub_url = hub_url.rstrip("/")
         if not collection:
             collection = "kb_general"
         try:

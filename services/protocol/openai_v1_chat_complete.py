@@ -420,7 +420,17 @@ def _curate_search_results(messages: list[dict[str, Any]]) -> None:
             if m.get("role") == "system" and "Search results" in str(m.get("content", "")):
                 search_text = str(m.get("content", ""))[:2000]
         if query and search_text:
-            search_service.curate_response(query, search_text)
+            # Curate into the topic KB the IntentRouter picked (kb_tu_nhien,
+            # kb_y_te, …) instead of a catch-all kb_general, so the enrichment
+            # loop deposits knowledge where ask_<col> will later find it.
+            collection = ""
+            try:
+                from services.search_service import _intent_router
+                cols = _intent_router.detect(query).get("kb_collections") or []
+                collection = cols[0] if cols else ""
+            except Exception:
+                collection = ""
+            search_service.curate_response(query, search_text, collection)
     except Exception:
         pass
 
