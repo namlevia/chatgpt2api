@@ -55,77 +55,12 @@ def _normalize_free_model(model: str) -> str:
     bare names like `gpt-4o` are left exactly as the old free branch sent them.
     Empty → "auto"."""
     slug = str(model or "").strip()
-    for p in ("chatgpt/free/", "cgf/", "free/"):
-        if slug.startswith(p):
-            slug = slug[len(p):]
-            break
+    if slug.startswith("cgf/"):
+        slug = slug[4:]
     return slug or "auto"
 
 
-# ── cgf/auto round-robin (đại ca's choice "A", 2026-05-31) ────────────────────
-# cgf/auto no longer forwards the literal "auto" to chatgpt.com's own picker.
-# Instead it cycles through the *enabled* cgf/* models so free-tier quota is
-# spread across models (each request advances to the next model). Empty pool
-# → fall back to ChatGPT's native "auto".
-_rr_lock = threading.Lock()
-_rr_index = 0
 
-# Slugs kept OUT of the auto-rotation pool even when enabled:
-#   auto      — would recurse into itself.
-#   research  — chatgpt.com deep-research is a long-running job, not a normal
-#               chat model; rotating into it would randomly stall ~1/N requests
-#               on a multi-minute task. Still callable explicitly via cgf/research.
-_AUTO_ROTATE_EXCLUDE = {"auto", "research"}
-
-
-_FREE_PREFIXES = ("chatgpt/free/", "cgf/", "free/")
-
-
-def _enabled_free_models() -> list[str]:
-    """Enabled FREE model slugs ONLY (ids under cgf/ , free/ , chatgpt/free/),
-    prefix stripped, deduped, sorted for a stable round-robin order.
-
-    CRITICAL: ids WITHOUT a free prefix (cx/ codex, gemini*/, deepseek/, flow/
-    images, cgw/ chatgpt-web, combo names like "AI Agent", ...) are NOT free-pool
-    models and MUST be skipped — otherwise cgf/auto rotates into other providers'
-    models and forwards a bogus model name to chatgpt.com. (Robust to the
-    chatgpt_free / ChatGPT_free key-casing split since we scan every key but
-    filter by prefix.)"""
-    ms = config.data.get("model_settings") or {}
-    enabled = ms.get("enabled_models") or {}
-    slugs: set[str] = set()
-    if isinstance(enabled, dict):
-        for vals in enabled.values():
-            if not isinstance(vals, list):
-                continue
-            for mid in vals:
-                if not isinstance(mid, str):
-                    continue
-                m = mid.strip()
-                stripped: str | None = None
-                for p in _FREE_PREFIXES:
-                    if m.startswith(p):
-                        stripped = m[len(p):]
-                        break
-                if stripped is None:
-                    continue  # not a free-pool model — skip
-                if stripped and stripped not in _AUTO_ROTATE_EXCLUDE:
-                    slugs.add(stripped)
-    return sorted(slugs)
-
-
-def _pick_rotating_free_model() -> str:
-    """Round-robin one concrete model for cgf/auto. Falls back to ChatGPT's own
-    "auto" picker when no concrete model is enabled."""
-    global _rr_index
-    models = _enabled_free_models()
-    if not models:
-        return "auto"
-    with _rr_lock:
-        pick = models[_rr_index % len(models)]
-        _rr_index += 1
-    logger.info({"event": "free_auto_rotate_model", "picked": pick, "pool": len(models)})
-    return pick
 
 
 def handle_free_chat(
@@ -159,15 +94,24 @@ def handle_free_chat(
 
     messages = _normalize_tool_messages(messages)
     model = _normalize_free_model(model)
-    # cgf/auto → round-robin a concrete enabled model (spread free quota across
-    # models). BUT only for plain chat: tool-bearing requests (Home Assistant
-    # sends GetLiveContext / HassTurnOn etc.) MUST keep a capable model — weak
-    # models like gpt-4o-mini / *-mini don't reliably emit/honor tool calls, so
-    # HA would answer generically instead of reading device state. For those we
-    # keep "auto" → ChatGPT's own picker (GPT-5 class). Only the free entry
-    # rotates; call_chatgpt_web (codex paid fallback) is untouched.
-    if model == "auto" and not tools:
-        model = _pick_rotating_free_model()
+
+    if model == "auto":
+        try:
+            from services.config import config as _config
+            ms = _config.data.get("model_settings") or {}
+            enabled = (ms.get("enabled_models") or {}).get("ChatGPT_free")
+            if not enabled:
+                enabled = (ms.get("enabled_models") or {}).get("chatgpt_free")
+            if isinstance(enabled, list):
+                for m in enabled:
+                    m = str(m).strip()
+                    if m.startswith("cgf/"):
+                        m = m[4:]
+                    if m and m not in ("auto", "research"):
+                        model = m
+                        break
+        except Exception:
+            pass
 
     # Retry loop: when an account 429/quota-burns or expires, rotate to the
     # next free account. Non-quota errors re-raise immediately so real bugs

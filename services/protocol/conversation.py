@@ -174,8 +174,8 @@ def message_text(content: Any) -> str:
 
 
 # Maximum payload size in bytes before triggering truncation.
-# ChatGPT backend hard limit is ~100 KB; we sit at the cap.
-_MAX_PAYLOAD_BYTES = 100_000
+# ChatGPT backend free limit was recently lowered; 45 KB is a safe cap.
+_MAX_PAYLOAD_BYTES = 45_000
 
 # RTK-inspired compression thresholds
 _RTK_TOOL_RESULT_MAX = 600   # Keep first+last chars of tool results

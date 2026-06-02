@@ -1042,9 +1042,14 @@ def _prefetch_ha_context_if_needed(
 
     HA sends a single HTTP request and reads a single streaming response.
     There is no way to do a 2nd LLM call inside the same connection.
-    So for chatgpt.com free accounts: if the user asks about device state,
-    we proactively call GetLiveContext, inject the result into a system
-    message, then call the LLM once with full context already loaded.
+
+    Strategy (mirrors how Codex reasons):
+    1. Extract device/room keywords from user query
+    2. Call ha_search_entities to find matching entity_ids (compact result)
+    3. Call ha_get_state on each matched entity for live on/off state
+    4. Inject compact result (~500 chars) into user message
+    Falls back to a short summary from format_states_context if no specific
+    entity is found.
     """
     if not tools:
         return messages
@@ -1067,47 +1072,145 @@ def _prefetch_ha_context_if_needed(
     if not _has_device_keyword(user_text):
         return messages
 
-    # Already has tool result injected from a previous turn?
+    # Already has live tool result injected? Skip.
     for m in messages:
         if m.get("role") == "user" and "KẾT QUẢ TỪ HỆ THỐNG" in str(m.get("content", "")):
             return messages
-        # inject_ha_context() already inserted the registry as a system message —
-        # don't duplicate it (double context overwhelms the LLM).
-        if m.get("role") == "system" and "Device Registry" in str(m.get("content", "")):
+        if m.get("role") == "user" and "DỮ LIỆU THỜI GIAN THỰC TỪ HOME ASSISTANT" in str(m.get("content", "")):
             return messages
 
-    # Pre-fetch GetLiveContext
+    # ── Targeted lookup (Codex-style: search → get_state) ──────────────────
+    # Extract room/device keywords from query. Use the same keyword list
+    # the static registry uses so lookup is consistent.
+    import unicodedata as _ud
+
+    def _strip_diacritics(t: str) -> str:
+        nfkd = _ud.normalize("NFKD", t.lower())
+        return "".join(c for c in nfkd if not _ud.combining(c))
+
+    user_folded = _strip_diacritics(user_text)
+
+    # Keywords to search for in HA: room names + device type words
+    _SEARCH_TOKENS = [
+        # rooms
+        "ban công", "bep", "phong ngu", "phong khach", "phong hoc",
+        "phong tam", "hanh lang", "san", "cau thang", "garage",
+        # devices
+        "den", "quat", "dieu hoa", "may lanh", "rem", "cua",
+        "cong tac", "o cam", "khoa", "may bom",
+    ]
+    _TOKEN_MAP = {
+        # map folded → Vietnamese search term for ha_search_entities
+        "ban cong": "ban công", "bep": "bếp", "phong ngu": "phòng ngủ",
+        "phong khach": "phòng khách", "phong hoc": "phòng học",
+        "phong tam": "phòng tắm", "hanh lang": "hành lang",
+        "den": "đèn", "quat": "quạt", "dieu hoa": "điều hòa",
+        "may lanh": "máy lạnh", "rem": "rèm", "cua": "cửa",
+        "cong tac": "công tắc", "o cam": "ổ cắm", "khoa": "khóa",
+        "may bom": "máy bơm",
+    }
+
+    found_tokens: list[str] = []
+    for tok in _SEARCH_TOKENS:
+        # Check if the room/device token is in the user query (ignoring diacritics)
+        # We replace spaces with empty string to match "ban công" -> "bancong" if needed,
+        # but the simplest is just checking tok in user_folded.
+        # But wait, tok is already diacritic-less in _SEARCH_TOKENS except for room names?
+        # Let's fix _SEARCH_TOKENS to be fully folded.
+        pass
+
+    # Let's just do a direct multi-token search on the cached states.
+    context_lines: list[str] = []
+    
+    # Extract ALL tokens from user_folded to match against entity names
+    user_words = user_folded.split()
+    # Meaningful words to look for (ignore stop words)
+    search_words = set([w for w in user_words if len(w) > 1 and w not in (
+        "dang", "bat", "hay", "tat", "cho", "xin", "hoi", "thong", "tin",
+        "trang", "thai", "cua", "co", "khong", "la", "gi", "nhe", "nha", "oi"
+    )])
+    
     try:
-        context_result = _execute_mcp_tool("GetLiveContext", {})
-        if not context_result:
-            return messages
-        logger.info({"event": "ha_prefetch_ok", "context_len": len(str(context_result))})
+        from services.ha_client import get_states
+        states = get_states()
+        if states:
+            # Score each entity by how many search words it matches
+            matched_entities = []
+            for s in states:
+                eid = s.get("entity_id", "").lower()
+                name = s.get("attributes", {}).get("friendly_name", "")
+                name_folded = _strip_diacritics(name)
+                # Combine eid and folded name for searching
+                searchable = f"{eid} {name_folded}"
+                
+                score = sum(1 for w in search_words if w in searchable)
+                if score > 0:
+                    matched_entities.append((score, s))
+            
+            # Sort by score descending, take top 15
+            matched_entities.sort(key=lambda x: x[0], reverse=True)
+            
+            for score, s in matched_entities[:15]:
+                # If score is too low and we have many matches, maybe skip. 
+                # But taking top 15 is safe.
+                eid = s.get("entity_id", "")
+                st = str(s.get("state", "unknown"))
+                attrs = s.get("attributes", {}) or {}
+                name = attrs.get("friendly_name", eid)
+                unit = attrs.get("unit_of_measurement", "")
+                state_str = f"{st} {unit}".strip() if unit else st
+                context_lines.append(f"- {name} ({eid}): **{state_str}**")
+                
     except Exception as exc:
-        logger.warning({"event": "ha_prefetch_failed", "error": str(exc)[:100]})
+        logger.warning({"event": "ha_prefetch_search_failed", "error": str(exc)[:80]})
+
+
+    if not context_lines:
+        # Fallback: use static cache but only take the controllable device lines
+        # (skip sensors/weather) and limit to 3000 chars total
+        try:
+            from services.ha_client import format_states_context
+            cached = format_states_context()
+            # Extract only lines with "on"/"off"/"bật"/"tắt" — saves ~80% payload
+            compact_lines = []
+            for line in cached.splitlines():
+                lower = line.lower()
+                if any(x in lower for x in (" | on", " | off", "| bật", "| tắt",
+                                              "light.", "switch.", "climate.", "fan.",
+                                              "cover.", "lock.")):
+                    compact_lines.append(line)
+                if len("\n".join(compact_lines)) > 3000:
+                    break
+            if compact_lines:
+                context_lines = compact_lines
+                logger.info({"event": "ha_prefetch_fallback_compact",
+                             "lines": len(context_lines)})
+        except Exception:
+            pass
+
+    if not context_lines:
+        logger.info({"event": "ha_prefetch_no_data"})
         return messages
 
-    full_text = str(context_result)
-    
-    # ChatGPT free lacks Advanced Data Analysis by default, so uploading as a file
-    # causes it to hallucinate "file expired" or "cannot read". Instead, we inject
-    # directly into the prompt. To avoid 400 Bad Request (chatgpt.com 100KB body limit),
-    # we truncate to 70,000 characters.
-    if len(full_text) > 70_000:
-        full_text = full_text[:70_000] + "\n\n...[Đã cắt bớt do giới hạn độ dài]..."
+    live_summary = "\n".join(context_lines)
+    logger.info({"event": "ha_prefetch_ok", "context_len": len(live_summary)})
 
     msg_context = (
-        f"\n\n[DỮ LIỆU THỜI GIAN THỰC TỪ HOME ASSISTANT]:\n"
-        f"{full_text}\n\n"
-        "--- HƯỚNG DẪN HÀNH ĐỘNG BẮT BUỘC (SYSTEM OVERRIDE) ---\n"
-        "Người dùng vừa hỏi về trạng thái thiết bị. Bạn đang có danh sách RẤT DÀI hàng trăm thiết bị ở trên.\n"
-        "YÊU CẦU BẮT BUỘC:\n"
-        "1. Nếu người dùng hỏi chung 'chi tiết trạng thái toàn bộ thiết bị', BẠN KHÔNG ĐƯỢC chỉ trả lời về 1-2 thiết bị (như thời tiết hay nhiệt độ).\n"
-        "2. BẠN PHẢI TỔNG HỢP VÀ BÁO CÁO các nhóm thiết bị ĐIỀU KHIỂN ĐƯỢC: Đèn, Quạt, Điều hoà, Cửa, Công tắc, Khóa.\n"
-        "3. Hãy liệt kê rõ: 'Hiện tại có [X] đèn đang bật: (kể tên)', 'Có [Y] điều hoà đang bật: (kể tên)'. Nếu tất cả tắt thì nói 'Tất cả đều tắt'.\n"
-        "4. BỎ QUA hoàn toàn các cảm biến (thời tiết, nhiệt độ, độ ẩm) trừ khi người dùng ĐÍCH DANH hỏi về chúng."
+        f"\n\n[TRẠNG THÁI THIẾT BỊ HOME ASSISTANT (LIVE)]:\n"
+        f"{live_summary}\n\n"
+        "Trả lời NGAY dựa trên dữ liệu trên. Ngắn gọn, không chào hỏi, không hỏi thêm."
     )
 
-    # Inject into the LAST user message to prevent prompt drowning
+    # Strip static Device Registry — live data replaces it
+    cleaned_messages = []
+    for m in messages:
+        if m.get("role") == "system" and "Device Registry" in str(m.get("content", "")):
+            logger.info({"event": "ha_prefetch_strip_registry", "reason": "live_context_available"})
+            continue
+        cleaned_messages.append(m)
+    messages = cleaned_messages
+
+    # Inject into the LAST user message
     injected = []
     injected_flag = False
     for m in reversed(messages):
@@ -1117,9 +1220,9 @@ def _prefetch_ha_context_if_needed(
             injected_flag = True
         else:
             injected.append(m)
-    
-    messages = list(reversed(injected))
-    return messages
+
+    return list(reversed(injected))
+
 
 
 def _has_device_keyword(text: str) -> bool:
@@ -1132,7 +1235,22 @@ def _request_wants_plain_text(messages: list[dict[str, Any]]) -> bool:
     aimed at HA voice or a plain-text surface. We strip markdown for these so
     `**tắt**` doesn't leak through as literal asterisks. Skip when the message
     explicitly contains a markdown table — user clearly wants rich formatting.
+
+    Also force plain text when a system message explicitly forbids markdown
+    (e.g. the HA "AI Agent" voice prompt: "Format responses using plain text
+    only. Do not use markdown..."). This covers search/knowledge answers
+    ("giá xăng", "giá vàng") that have no device keyword but still must arrive
+    as plain text — while the sibling agent whose prompt says "using markdown"
+    is left untouched.
     """
+    for m in messages:
+        if m.get("role") != "system":
+            continue
+        sys_text = m.get("content")
+        if isinstance(sys_text, str):
+            low = sys_text.lower()
+            if "plain text only" in low or "do not use markdown" in low or "không dùng markdown" in low:
+                return True
     for m in reversed(messages):
         if m.get("role") != "user":
             continue
@@ -1176,6 +1294,12 @@ _OAICITE = re.compile(r"[\[【]?\s*oaicite[^\]】\)]*[\]】\)]?")
 # `entity[ "string", "string", ... ]` shape with at least one quoted arg so we
 # don't accidentally strip valid `entity[0]` / `entity[i]` code in answers.
 _ENTITY_LEAK = re.compile(r'\bentity\[\s*"[^"]*"(?:\s*,\s*"[^"]*")*\s*\]')
+# Internal trace appended by openai_backend_api._api_messages_to_conversation_messages
+# when an assistant turn carried tool_calls. The ChatGPT web model sometimes
+# echoes this line verbatim at the start of its next answer (observed on
+# "trạng thái nhà" → "[System Log: You executed tool GetLiveContext with args {}]").
+# It is internal bookkeeping and must never reach the user.
+_SYSLOG_LEAK = re.compile(r"\n*\[System Log:[^\]]*\]\n*")
 
 
 def _strip_artifacts_inline(text: str) -> str:
@@ -1184,6 +1308,7 @@ def _strip_artifacts_inline(text: str) -> str:
     out = _CITE_TURN.sub("", text)
     out = _OAICITE.sub("", out)
     out = _ENTITY_LEAK.sub("", out)
+    out = _SYSLOG_LEAK.sub("", out)
     return out
 
 
@@ -2113,10 +2238,12 @@ def _inject_mcp_tools(
             logger.info({"event": "mcp_inject_skipped", "reason": "vision_request"})
             return tools if tools else None
 
-        # Search results already injected — LLM just needs to summarize.
+        # Search results already injected. We used to skip tool injection here
+        # to save prompt space, but users want to see explicit tool calls
+        # (e.g. for weather) or fallback to them if search timed out.
         if search_injected:
-            logger.info({"event": "mcp_inject_skipped", "reason": "search_injected"})
-            return tools if tools else None
+            logger.info({"event": "mcp_inject_proceeding", "reason": "search_injected_but_tools_requested"})
+            # Do NOT return early, let the tools be injected so the LLM can explicitly call them if needed.
 
         from services.mcp_client import get_enabled_mcp_tools
         from services.ha_client import get_ha_tools

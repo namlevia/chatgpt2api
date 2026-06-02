@@ -894,6 +894,24 @@ class SearchService:
                     seen.add(key)
                     all_results.append(r)
 
+        def _trim_mcp_result(server_id: str, text: str, limit: int = 4000) -> str:
+            """Head-truncating a huge MCP table can drop the rows the user asked
+            for. vn_currency.get_gold_prices returns ~100KB with SILVER rows
+            listed BEFORE gold, so a blind text[:limit] head-cut fed the LLM only
+            silver on "giá vàng". When the query targets gold, surface gold rows
+            first so they survive the cut."""
+            if len(text) <= limit:
+                return text
+            ql = query.lower()
+            wants_gold = any(k in ql for k in ("vàng", "vang", "gold", "sjc", "doji", "pnj", "9999", "nhẫn", "24k", "18k"))
+            if server_id == "vn_currency" and wants_gold:
+                gold, silver = [], []
+                for ln in text.splitlines():
+                    low = ln.lower()
+                    (silver if ("bạc" in low or "ag 999" in low or "ancarat" in low) else gold).append(ln)
+                text = "\n".join(gold + silver)
+            return text[:limit]
+
         # --- Luong 1: Smart MCP tool call dua theo intent ---
         intent = _intent_router.detect(query)
         mcp_server_ids = intent["mcp_tools"]
@@ -1032,6 +1050,14 @@ class SearchService:
             for c in kb_collections:
                 futures[ex.submit(_call_rag, c)] = ("rag", c)
                 
+        # Domain MCP tools (vn_currency ~0.3s, vn_petrol, vn_weather...) are fast
+        # and authoritative. federated_search.search_all can take 25s+ and returns
+        # academic noise for VN queries, so it always hit the 8s wall and forced
+        # EVERY search to cost the full 8s. Track the authoritative futures and
+        # stop as soon as they finish instead of blocking on the slow crawler.
+        priority = {f for f, (jt, nm) in futures.items()
+                    if jt == "mcp" and nm != "federated_search"}
+        done_priority: set = set()
         try:
             # Giam timeout xuong 8 giay de can bang giua toc do va do chinh xac
             for future in concurrent.futures.as_completed(futures, timeout=8):
@@ -1040,17 +1066,22 @@ class SearchService:
                     if job_type == "mcp":
                         sid, text = future.result()
                         if text and len(text) > 20:
-                            # Bumped from 2000 → 4000 so structured MCP results
-                            # (price tables with SJC + DOJI + multiple gold types,
-                            # weather details, full law articles) don't get truncated
-                            # before the LLM can extract numbers from them.
-                            _add([{"title": f"[{sid}]", "snippet": text[:4000], "url": ""}], sid)
+                            # _trim_mcp_result keeps the commodity the user asked
+                            # about (gold-first reorder before the 4000-char cut)
+                            # so "giá vàng" no longer gets only the silver rows
+                            # that get_gold_prices happens to list first.
+                            _add([{"title": f"[{sid}]", "snippet": _trim_mcp_result(sid, text), "url": ""}], sid)
                     else:
                         _, results = future.result()
                         _add(results, name)
-                        
                 except Exception:
                     pass
+                if future in priority:
+                    done_priority.add(future)
+                # Authoritative tools done + we already have data → don't wait out
+                # the slow federated crawler (8s → sub-second for VN price queries).
+                if priority and len(done_priority) == len(priority) and all_results:
+                    break
         except concurrent.futures.TimeoutError:
             logger.warning({"event": "search_all_timeout", "took": time.time() - start_t})
         finally:

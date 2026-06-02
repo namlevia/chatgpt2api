@@ -21,7 +21,7 @@ const PROVIDER_LABELS: Record<string, { label: string; color: string; tint: stri
   flow: { label: "Google Labs Flow", color: "#34A853", tint: "emerald" },
 };
 
-const CORE_MODELS = ["ha-agent", "chatgpt/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto"];
+const CORE_MODELS = ["ha-agent", "chatgpt/auto", "cgf/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto"];
 
 export default function ModelsPage() {
   const [available, setAvailable] = useState<Record<string, string[]>>({});
@@ -212,7 +212,7 @@ export default function ModelsPage() {
         <p className="text-xs text-stone-500">
           <Sparkles className="inline size-3 mr-1" />
           Model <strong>auto</strong> tự động chọn model tốt nhất dựa trên cài đặt mặc định bên dưới.
-          Các model chính (<code>ha-agent</code>, <code>chatgpt/auto</code>, <code>oc/auto</code>, <code>cx/auto</code>, <code>ag/auto</code>) luôn được hiển thị.
+          Các model chính (<code>ha-agent</code>, <code>cgf/auto</code>, <code>oc/auto</code>, <code>cx/auto</code>, <code>ag/auto</code>) luôn được hiển thị.
         </p>
       </div>
 
@@ -337,8 +337,9 @@ export default function ModelsPage() {
                         // Position among enabled regular models within THIS provider.
                         // Compute from regularModels (already scoped to provider) so
                         // numbering resets per section even if backend data is cross-contaminated.
-                        const enabledRegularModels = regularModels.filter(m => isEnabled(provider, m));
-                        const orderIdx = enabled ? enabledRegularModels.indexOf(modelId) : -1;
+                        // Compute from enabled_models so it respects the user's checked order
+                        const enabledList = (settings.enabled_models[provider] || []).filter(m => !CORE_MODELS.includes(m) && available[provider]?.includes(m));
+                        const orderIdx = enabled ? enabledList.indexOf(modelId) : -1;
                         const orderNum = orderIdx >= 0 ? orderIdx + 1 : null;
 
                         return (
