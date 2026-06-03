@@ -36,6 +36,42 @@ _XML_WRAP_HINT = (
 )
 
 
+def _slim_tool_schema(params: dict[str, Any]) -> dict[str, Any]:
+    """Drop oversized `enum` arrays from a tool schema before it is serialized
+    into the ChatGPT-web tool prompt.
+
+    Home Assistant repeats the full exposed-entity list (~150 names) as an
+    `enum` inside EVERY control tool (HassTurnOn, HassLightSet, …). Dumped
+    verbatim by _build_tool_prompt that balloons the prompt to 50KB+, blows
+    past the 45KB free-web cap, and _truncate_messages then cuts the injected
+    live device context — so "trạng thái nhà" comes back as a generic "what do
+    you want me to do?" instead of the home status. The model still gets the
+    exact entity names from the registry/prefetch that's already in the prompt,
+    so the giant enum is pure redundant weight. Small enums (areas, domains)
+    are kept. Only affects the chatgpt-web path; codex/native tools are
+    untouched.
+    """
+    import copy
+    try:
+        p = copy.deepcopy(params)
+    except Exception:
+        return params
+
+    def _walk(node: Any) -> None:
+        if isinstance(node, dict):
+            enum = node.get("enum")
+            if isinstance(enum, list) and len(enum) > 20:
+                node.pop("enum", None)
+            for v in node.values():
+                _walk(v)
+        elif isinstance(node, list):
+            for v in node:
+                _walk(v)
+
+    _walk(p)
+    return p
+
+
 def _build_tool_prompt(tools: list[dict[str, Any]], tool_choice: Any = None) -> str:
     """Generate a system prompt chunk describing available tools. Mirrors Gemini-FastAPI _build_tool_prompt."""
     if not tools:
@@ -51,7 +87,7 @@ def _build_tool_prompt(tools: list[dict[str, Any]], tool_choice: Any = None) -> 
         params = f.get("parameters") or {}
         properties = params.get("properties") or {}
         if properties:
-            schema_text = json.dumps(params, ensure_ascii=False, indent=2)
+            schema_text = json.dumps(_slim_tool_schema(params), ensure_ascii=False, indent=2)
             lines.append("Arguments JSON schema:")
             lines.append(schema_text)
         else:
