@@ -2227,6 +2227,29 @@ def _messages_have_images(messages: list[dict[str, Any]] | None) -> bool:
     return False
 
 
+_STATUS_QUERY_KEYWORDS = [
+    "trạng thái", "tình trạng", "liệt kê", "có những", "kiểm tra", "thế nào",
+    "ra sao", "tổng quan", "như thế nào", "đang bật", "đang tắt", "bao nhiêu",
+]
+_CONTROL_VERBS = [
+    "bật", "tắt", "mở", "đóng", "đặt", "chỉnh", "tăng", "giảm", "kích hoạt",
+    "khởi động", "dừng", "khoá", "khóa", "mở khoá", "mở khóa", "set ",
+]
+
+
+def _is_status_only_query(text: str) -> bool:
+    """True for a pure status/listing question with NO control verb. Such a
+    query is answered entirely from the prefetched live context, so we can ship
+    ZERO tools — HA otherwise attaches ~40 control tools whose schemas bloat the
+    free-account payload past chatgpt.com's limit (→ 413 → generic reply)."""
+    t = (text or "").lower()
+    if not any(k in t for k in _STATUS_QUERY_KEYWORDS):
+        return False
+    if any(v in t for v in _CONTROL_VERBS):
+        return False
+    return True
+
+
 def _inject_mcp_tools(
     tools: list[dict[str, Any]] | None,
     skip_ha_search: bool = False,
@@ -2265,6 +2288,14 @@ def _inject_mcp_tools(
         if is_vision:
             logger.info({"event": "mcp_inject_skipped", "reason": "vision_request"})
             return tools if tools else None
+
+        # Pure status/listing query whose answer is already in the prefetched
+        # live context → ship NO tools. Drops HA's ~40 control-tool schemas
+        # (the dominant payload bloat that 413s the free backend and makes the
+        # model reply "what do you want me to do?"). Control queries keep tools.
+        if skip_ha_search and _is_status_only_query(user_text):
+            logger.info({"event": "mcp_inject_skipped", "reason": "status_only_query"})
+            return None
 
         # Search results already injected. We used to skip tool injection here
         # to save prompt space, but users want to see explicit tool calls

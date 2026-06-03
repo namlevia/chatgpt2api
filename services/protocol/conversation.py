@@ -87,7 +87,10 @@ def _build_tool_prompt(tools: list[dict[str, Any]], tool_choice: Any = None) -> 
         params = f.get("parameters") or {}
         properties = params.get("properties") or {}
         if properties:
-            schema_text = json.dumps(_slim_tool_schema(params), ensure_ascii=False, indent=2)
+            # Compact (no indent) — with 40+ HA tools the indent=2 whitespace
+            # alone added ~6KB to the prompt and pushed free requests over the
+            # chatgpt.com payload limit.
+            schema_text = json.dumps(_slim_tool_schema(params), ensure_ascii=False, separators=(",", ":"))
             lines.append("Arguments JSON schema:")
             lines.append(schema_text)
         else:
