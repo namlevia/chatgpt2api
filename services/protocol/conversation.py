@@ -210,8 +210,13 @@ def message_text(content: Any) -> str:
 
 
 # Maximum payload size in bytes before triggering truncation.
-# ChatGPT backend free limit was recently lowered; 45 KB is a safe cap.
-_MAX_PAYLOAD_BYTES = 45_000
+# chatgpt.com free backend hard limit ≈ 100KB (see backend_router.FREE_PAYLOAD_LIMIT).
+# 45KB was too tight: real HA Assist requests carry a 40KB+ exposed-entity list in
+# the system prompt (user exposes ~640 entities) PLUS the server's own live context,
+# so 45KB truncated the device data and "trạng thái nhà" came back generic. 90KB
+# fits those real payloads while staying under the 100KB hard limit; oversize spill
+# is still RTK-compressed and the chatgpt_free path catches any residual 413.
+_MAX_PAYLOAD_BYTES = 90_000
 
 # RTK-inspired compression thresholds
 _RTK_TOOL_RESULT_MAX = 600   # Keep first+last chars of tool results
