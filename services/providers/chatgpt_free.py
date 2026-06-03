@@ -129,6 +129,7 @@ def handle_free_chat(
                 token, model, messages, tools, tool_choice, body, stream
             )
         except RuntimeError as exc:
+            logger.info({"event": "free_account_raw_error", "attempt": attempt, "error": str(exc)[:300]})
             err_msg = str(exc).lower()
             is_quota = (
                 "429" in err_msg
@@ -166,12 +167,23 @@ def handle_free_chat(
                 excluded_tokens.add(token)
                 continue
             if is_payload_too_large:
+                try:
+                    account_service.demote_account(token)
+                except Exception:
+                    pass
                 logger.info({"event": "free_account_rotate", "reason": "payload_too_large", "attempt": attempt})
                 excluded_tokens.add(token)
                 last_quota_error = exc
                 continue
             if not is_quota:
                 raise
+            
+            try:
+                account_service.update_account(token, {"quota": 0, "status": "limited"})
+                account_service.demote_account(token)
+            except Exception:
+                pass
+                
             logger.info({
                 "event": "free_account_rotate", "reason": "quota_burnt",
                 "attempt": attempt, "remaining_excluded": len(excluded_tokens) + 1,
@@ -205,6 +217,8 @@ def _try_free_with_token(
         _prefetch_ha_context_if_needed,
         _stream_chatgpt_addon,
         _chatgpt_addon_completion,
+        _extract_last_user_text,
+        _is_status_only_query,
     )
 
     # Build a backend bound to OUR rotation-selected token so text_backend()
@@ -232,11 +246,41 @@ def _try_free_with_token(
     # system message, then call once.
     messages = _prefetch_ha_context_if_needed(messages, tools, token)
 
+    # For pure status/listing queries, since we already injected the context
+    # above, drop all tools. ChatGPT Free rejects payloads >45KB (413 Payload
+    # Too Large), and 40 HA tool schemas will crash it.
+    user_text = _extract_last_user_text(messages)
+    if _is_status_only_query(user_text):
+        tools = None
+
     if stream:
         gen = stream_text_chat_completion(backend, messages, model, tools, tool_choice)
         return _prefetch_stream(gen, "chatgpt.com backend stream failed — token may be invalid")
     request = ConversationRequest(model=model, messages=messages, tools=tools, tool_choice=tool_choice)
-    return completion_response(model, collect_text(backend, request), messages=messages)
+    content = collect_text(backend, request)
+    
+    if tools:
+        from services.protocol.openai_v1_chat_complete import _extract_xml_tool_calls_from_text
+        tool_calls = _extract_xml_tool_calls_from_text(content)
+        if tool_calls:
+            import time, uuid
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": tool_calls,
+                    },
+                    "finish_reason": "tool_calls",
+                }],
+            }
+            
+    return completion_response(model, content, messages=messages)
 
 
 def call_chatgpt_web(

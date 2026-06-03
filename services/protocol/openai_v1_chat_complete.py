@@ -227,6 +227,13 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
 
 
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
+    try:
+        import json
+        with open("/tmp/last_req.json", "w", encoding="utf-8") as f:
+            f.write(json.dumps(body, ensure_ascii=False))
+    except Exception:
+        pass
+
     # Image chat requests always use existing DALL-E flow
     if is_image_chat_request(body):
         if body.get("stream"):
@@ -249,6 +256,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         ha_query_pristine = _is_ha(messages)
     except Exception:
         ha_query_pristine = False
+        
+    original_user_text = _extract_last_user_text(messages)
 
     # Check if this is a combo model — try each model until success
     if backend_router.is_combo(model):
@@ -266,27 +275,28 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
             _curate_search_results(messages_copy)
         else:
             messages_copy = messages
-
+            
         # Mirror the non-combo path: inject HA registry as a system message for
         # HA-related queries so the LLM can answer in ONE round-trip instead of
-        # doing GetLiveContext / ha_get_state → wait → final answer (saves ~7s).
-        ha_context_injected = False
-        if ha_query_pristine:
-            try:
-                from services.ha_client import inject_ha_context
-                before_len = len(messages_copy)
-                messages_copy = inject_ha_context(messages_copy)
-                ha_context_injected = len(messages_copy) > before_len
-            except Exception:
-                pass
-
-        tools_with_mcp = _inject_mcp_tools(
-            tools, skip_ha_search=ha_context_injected,
-            is_vision=is_vision_request, search_injected=search_injected,
-            user_text=_extract_last_user_text(messages_copy),
-        )
-
+        # doing GetLiveContext / ha_get_state -> wait -> final answer (saves ~7s).
         for route in routes:
+            messages_for_route = list(messages_copy)
+            ha_context_injected = False
+            if ha_query_pristine and route.provider != "chatgpt_free":
+                try:
+                    from services.ha_client import inject_ha_context
+                    before_len = len(messages_for_route)
+                    messages_for_route = inject_ha_context(messages_for_route)
+                    ha_context_injected = len(messages_for_route) > before_len
+                except Exception:
+                    pass
+
+            tools_with_mcp = _inject_mcp_tools(
+                tools, skip_ha_search=ha_context_injected,
+                is_vision=is_vision_request, search_injected=search_injected,
+                user_text=original_user_text,
+                is_free_model=(route.provider == "chatgpt_free"),
+            )
             try:
                 cooldown = model_cooldown.get_cooldown_info(route.model)
                 if cooldown:
@@ -296,13 +306,13 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
 
                 logger.info({"event": "combo_try", "combo": model, "provider": route.provider, "model": route.model})
                 
-                result = _dispatch(route, messages_copy, tools_with_mcp, tool_choice, body)
+                result = _dispatch(route, messages_for_route, tools_with_mcp, tool_choice, body)
                 # Execute MCP tools server-side for combo too
                 if not isinstance(result, dict):
-                    result = _wrap_mcp_stream(result, messages_copy, route, body)
+                    result = _wrap_mcp_stream(result, messages_for_route, route, body)
                 elif isinstance(result, dict):
-                    result = _execute_mcp_tools_in_response(messages_copy, result, route, body)
-                result = _maybe_strip_markdown(result, messages_copy, force=ha_context_injected or bool(body.get("_is_ha_request")))
+                    result = _execute_mcp_tools_in_response(messages_for_route, result, route, body)
+                result = _maybe_strip_markdown(result, messages_for_route, force=ha_context_injected or bool(body.get("_is_ha_request")))
                 model_cooldown.record_success("combo:" + model, route.model)
                 return result
             except Exception as exc:
@@ -329,7 +339,7 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     # Inject HA smart home context only when the PRISTINE user message looked
     # like an HA query. This avoids false positives from search-result text.
     ha_context_injected = False
-    if ha_query_pristine:
+    if ha_query_pristine and route.provider != "chatgpt_free":
         try:
             from services.ha_client import inject_ha_context
             before_len = len(messages)
@@ -342,7 +352,8 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     tools = _inject_mcp_tools(
         tools, skip_ha_search=ha_context_injected,
         is_vision=is_vision_request, search_injected=search_injected,
-        user_text=_extract_last_user_text(messages),
+        user_text=original_user_text,
+        is_free_model=(route.provider == "chatgpt_free"),
     )
 
     result = _dispatch(route, messages, tools, tool_choice, body)
@@ -353,8 +364,19 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
         result = _wrap_mcp_stream(result, messages, route, body)
     elif isinstance(result, dict):
         result = _execute_mcp_tools_in_response(messages, result, route, body)
+        import json
+        logger.info({"event": "debug_final_result", "result": json.dumps(result, ensure_ascii=False)[:2000]})
 
     result = _maybe_strip_markdown(result, messages, force=ha_context_injected or bool(body.get("_is_ha_request")))
+    try:
+        import json
+        with open("/tmp/last_response.json", "w", encoding="utf-8") as f:
+            if isinstance(result, dict):
+                f.write(json.dumps(result, ensure_ascii=False))
+            else:
+                f.write("STREAM_GENERATOR")
+    except Exception:
+        pass
     return result
 
 
@@ -765,7 +787,7 @@ def _execute_mcp_tools_in_response(
             }
 
         # Re-dispatch with updated messages
-        tools = _inject_mcp_tools(body.get("tools"))
+        tools = _inject_mcp_tools(body.get("tools"), is_free_model=(route.provider == "chatgpt_free"))
         try:
             current_result = _dispatch(route, current_messages, tools, body.get("tool_choice"), body)
             if not isinstance(current_result, dict):
@@ -1035,11 +1057,21 @@ def _is_trivial_chat(user_text: str) -> bool:
 
 
 def _extract_last_user_text(messages: list[dict[str, Any]]) -> str:
-    """Extract the text content of the last user message."""
+    """Extract the text of the last user message — handles BOTH a plain string
+    and HA's structured list content (e.g. [{"type":"text","text":"trạng thái
+    nhà"}, {"type":"image_url",...}]). Returning "" for list content silently
+    broke the status/control tool heuristics on real HA requests."""
     for m in reversed(messages or []):
         if m.get("role") == "user":
             c = m.get("content", "")
-            return c if isinstance(c, str) else ""
+            if isinstance(c, str):
+                return c
+            if isinstance(c, list):
+                return " ".join(
+                    str(p.get("text") or "") for p in c
+                    if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+                )
+            return ""
     return ""
 
 
@@ -1061,14 +1093,30 @@ def _prefetch_ha_context_if_needed(
     Falls back to a short summary from format_states_context if no specific
     entity is found.
     """
-    if not tools:
+    # UNCONDITIONALLY trim HA's own exposed-entity dump for chatgpt_free.
+    # When ~600+ entities are exposed to Assist, HA appends a 40KB+ block
+    # "areas and the devices in this smart home" to the system prompt.
+    # chatgpt.com free rejects payloads >45KB (413), so we always cut it.
+    _HA_ASSIST_MARKER = "areas and the devices in this smart home"
+    cleaned_messages = []
+    for m in messages:
+        content = str(m.get("content", ""))
+        if m.get("role") == "system" and _HA_ASSIST_MARKER in content:
+            idx = content.find(_HA_ASSIST_MARKER)
+            line_start = content.rfind("\n", 0, idx)
+            trimmed = (content[:line_start] if line_start > 0 else content[:idx]).rstrip()
+            logger.info({"event": "ha_prefetch_trim_assist_entities",
+                         "removed_chars": len(content) - len(trimmed)})
+            cleaned_messages.append({**m, "content": trimmed})
+            continue
+        cleaned_messages.append(m)
+    messages = cleaned_messages
+
+    from services.ha_client import is_ha_query
+    if not is_ha_query(messages):
         return messages
 
-    # Only pre-fetch if HA tools are available (so we know it's a smart home capable client)
-    tool_names = {(t.get("function") or {}).get("name", "") for t in tools}
-    has_ha_tools = any(name.startswith("Hass") or name.startswith("ha_") or name == "GetLiveContext" for name in tool_names)
-    if not has_ha_tools:
-        return messages
+
 
     # Only pre-fetch if user query is about device state
     user_text = ""
@@ -1135,11 +1183,22 @@ def _prefetch_ha_context_if_needed(
     
     # Extract ALL tokens from user_folded to match against entity names
     user_words = user_folded.split()
-    # Meaningful words to look for (ignore stop words)
-    search_words = set([w for w in user_words if len(w) > 1 and w not in (
-        "dang", "bat", "hay", "tat", "cho", "xin", "hoi", "thong", "tin",
-        "trang", "thai", "cua", "co", "khong", "la", "gi", "nhe", "nha", "oi"
-    )])
+    
+    # Check if this is a general query
+    general_phrases = ["trang thai nha", "tong quan", "ca nha", "tat ca", "tinh hinh", "nha hien tai", "trong nha"]
+    is_general = any(p in user_folded for p in general_phrases)
+    
+    if is_general:
+        # Force fallback (full context) for general queries
+        search_words = set()
+    else:
+        # Meaningful words to look for (ignore stop words)
+        search_words = set([w for w in user_words if len(w) > 1 and w not in (
+            "dang", "bat", "hay", "tat", "cho", "xin", "hoi", "thong", "tin",
+            "trang", "thai", "cua", "co", "khong", "la", "gi", "nhe", "nha", "oi",
+            "hien", "tai", "tat", "ca", "cac", "thiet", "bi"
+        )])
+    
     
     try:
         from services.ha_client import get_states
@@ -1178,19 +1237,36 @@ def _prefetch_ha_context_if_needed(
 
     if not context_lines:
         # Fallback: use static cache but only take the controllable device lines
-        # (skip sensors/weather) and limit to 3000 chars total
+        # (skip sensors/weather) and limit to 25000 chars total
         try:
             from services.ha_client import format_states_context
             cached = format_states_context()
-            # Extract only lines with "on"/"off"/"bật"/"tắt" — saves ~80% payload
+            # Smart filter: only include ACTIVE core devices, ALL doors/locks, and IMPORTANT sensors
             compact_lines = []
             for line in cached.splitlines():
                 lower = line.lower()
-                if any(x in lower for x in (" | on", " | off", "| bật", "| tắt",
-                                              "light.", "switch.", "climate.", "fan.",
-                                              "cover.", "lock.")):
-                    compact_lines.append(line)
-                if len("\n".join(compact_lines)) > 3000:
+                
+                is_core = any(x in lower for x in ('light.', 'switch.', 'climate.', 'fan.', 'cover.', 'lock.'))
+                is_sensor = any(x in lower for x in ('sensor.', 'binary_sensor.'))
+                
+                if not (is_core or is_sensor):
+                    continue
+                    
+                # Remove the check that skips off devices so ALL lights/switches are visible
+                        
+                # For sensors, only include important ones to avoid spam
+                if is_sensor:
+                    important_keywords = [
+                        'nhiệt độ', 'độ ẩm', 'chuyển động', 'khói', 'cửa', 'pin', 'power', 
+                        'nhiet', 'am', 'door', 'motion', 'smoke', 'battery',
+                        'âm lịch', 'rằm', 'giỗ', 'công suất', 'điện', 'aptomat', 'hôm nay',
+                        'lịch', 'calendar', 'aqi', 'không khí', 'air'
+                    ]
+                    if not any(k in lower for k in important_keywords):
+                        continue
+                        
+                compact_lines.append(line)
+                if len("\n".join(compact_lines)) > 25000: # Safe upper bound
                     break
             if compact_lines:
                 context_lines = compact_lines
@@ -1207,33 +1283,28 @@ def _prefetch_ha_context_if_needed(
     logger.info({"event": "ha_prefetch_ok", "context_len": len(live_summary)})
 
     msg_context = (
-        f"\n\n[TRẠNG THÁI THIẾT BỊ HOME ASSISTANT (LIVE)]:\n"
-        f"{live_summary}\n\n"
-        "Trả lời NGAY dựa trên dữ liệu trên. Ngắn gọn, không chào hỏi, không hỏi thêm."
+        f"\n\n[DỮ LIỆU THỜI GIAN THỰC TỪ HOME ASSISTANT]:\n"
+        f"Đây là danh sách trạng thái hiện tại của các thiết bị.\n"
+        f"Nguyên tắc trả lời:\n"
+        f"1. Nếu user hỏi TỔNG QUAN (ví dụ: trạng thái nhà): Hãy trình bày theo ĐÚNG THỨ TỰ sau để đảm bảo luôn đầy đủ, không bị thiếu sót ngẫu nhiên:\n"
+        f"   - An ninh & Cửa: Trạng thái cửa chính, khoá, các cảm biến chuyển động/khói.\n"
+        f"   - Nhiệt độ & Môi trường: Quạt, Điều hoà, nhiệt độ/độ ẩm các phòng, thời tiết/AQI ngoài trời.\n"
+        f"   - Ánh sáng: Gom nhóm trạng thái của toàn bộ các đèn.\n"
+        f"   - Thiết bị & Điện năng: Aptomat tổng, công suất, điện tiêu thụ, bình nóng lạnh.\n"
+        f"   - Pin: Chỉ nhắc đến các thiết bị sắp hết pin (0-15%) hoặc cảnh báo cần thiết.\n"
+        f"   - Sự kiện & Âm lịch: Lịch âm, ngày rằm, ngày giỗ.\n"
+        f"   Tuyệt đối BỎ QUA các thông số kỹ thuật mạng (như Remote UI, Ping, thiết bị nội bộ) không liên quan đến sinh hoạt.\n"
+        f"2. Nếu user hỏi THIẾT BỊ CỤ THỂ: Trả lời CHỈ BẰNG 1 CÂU DUY NHẤT (ví dụ: 'Đèn phòng học đang tắt'). TUYỆT ĐỐI CẤM giải thích dài dòng. CẤM nhắc đến các thông số phụ (như manual, auto, công tắc, automation) trừ khi user chủ động hỏi.\n"
+        f"Mỗi dòng dữ liệu bên dưới có định dạng: `Tên (entity_id) | Trạng thái`.\n\n"
+        f"{live_summary}\n"
     )
 
     # Strip static Device Registry (server's own) — live prefetch replaces it.
-    # ALSO trim HA's own exposed-entity dump: when ~600+ entities are exposed to
-    # Assist, HA appends a 40KB+ "areas and the devices in this smart home" YAML
-    # list to the system prompt. chatgpt.com free can't take that much (502/413),
-    # and our compact live prefetch above already carries the states, so cut the
-    # list (keep the instructions before it). Targeted control still works — the
-    # prefetch search resolves the specific entity by keyword.
-    _HA_ASSIST_MARKER = "areas and the devices in this smart home"
     cleaned_messages = []
     for m in messages:
         content = str(m.get("content", ""))
         if m.get("role") == "system" and "Device Registry" in content:
             logger.info({"event": "ha_prefetch_strip_registry", "reason": "live_context_available"})
-            continue
-        if m.get("role") == "system" and _HA_ASSIST_MARKER in content:
-            idx = content.find(_HA_ASSIST_MARKER)
-            # back up to the start of that line so we drop the whole header line
-            line_start = content.rfind("\n", 0, idx)
-            trimmed = (content[:line_start] if line_start > 0 else content[:idx]).rstrip()
-            logger.info({"event": "ha_prefetch_trim_assist_entities",
-                         "removed_chars": len(content) - len(trimmed)})
-            cleaned_messages.append({**m, "content": trimmed})
             continue
         cleaned_messages.append(m)
     messages = cleaned_messages
@@ -1403,6 +1474,9 @@ def _strip_markdown_in_stream(it: Iterator[dict[str, Any]]) -> Iterator[dict[str
                         has_content = True
 
             if has_finish and not emitted_final and full_text:
+                import logging
+                logging.getLogger("uvicorn.error").info({"event": "debug_final_stream", "text": full_text[:1000]})
+                
                 # Emit the stripped full text as a content chunk first
                 stripped = _strip_markdown_inline(full_text)
                 content_chunk = {
@@ -1634,7 +1708,7 @@ def _opencode_completion_response(
             content = str(choices[0].get("message", {}).get("content", "") or "")
 
         # Parse text JSON tool calls into native format
-        tool_calls = _extract_tool_calls_from_text(content)
+        tool_calls = _extract_tool_calls_from_text(content) or _extract_xml_tool_calls_from_text(content)
         message = {"role": "assistant", "content": ""}
         if tool_calls:
             message["tool_calls"] = tool_calls
@@ -2256,32 +2330,9 @@ def _inject_mcp_tools(
     is_vision: bool = False,
     search_injected: bool = False,
     user_text: str = "",
+    is_free_model: bool = False,
 ) -> list[dict[str, Any]] | None:
-    """Inject tools from enabled MCP servers + HA into the tools list.
-
-    Args:
-        skip_ha_search: When True, the full HA device registry (names + states)
-            has already been added to the system prompt by inject_ha_context().
-            In that case we strip every READ-ONLY HA tool (ha_search_entities,
-            ha_get_state, HA-native GetLiveContext) AND skip MCP injection
-            entirely — none of Wikipedia / Exa / etc. is useful for a "trạng
-            thái đèn" query, and dropping them removes ~23 distracting tools
-            plus the 2.5s MCP discovery cost on cache miss. Control tools
-            (ha_call_service, HassTurn*) are preserved.
-        is_vision: When True the request carries image attachments (camera
-            snapshot, ai_task.generate_data, etc.). Vision tasks never use
-            search/control tools, so we skip the entire injection — saves
-            ~2.5s of MCP discovery on cache miss and prevents the LLM from
-            scanning a 60+ tool list before answering "what's in this image".
-        search_injected: When True search_service has already executed MCP
-            searches + grounding and dropped the results into the prompt.
-            The LLM's only job left is to summarize — adding 60+ more MCP
-            tools just bloats the prompt and tempts the LLM into a second
-            search round-trip. Skip injection.
-        user_text: The last user message text. When provided and clearly a
-            trivial greeting/chat (no tool-relevant keywords), MCP tools are
-            skipped to keep the payload under ChatGPT's per-account size limit.
-    """
+    """Inject tools from enabled MCP servers + HA into the tools list."""
     logger.info({"event": "mcp_inject_start", "input_tools": len(tools or [])})
     try:
         # Vision request — skip all injection. Return the caller's tools as-is.
@@ -2293,9 +2344,13 @@ def _inject_mcp_tools(
         # live context → ship NO tools. Drops HA's ~40 control-tool schemas
         # (the dominant payload bloat that 413s the free backend and makes the
         # model reply "what do you want me to do?"). Control queries keep tools.
-        if skip_ha_search and _is_status_only_query(user_text):
-            logger.info({"event": "mcp_inject_skipped", "reason": "status_only_query"})
+        if (skip_ha_search or is_free_model) and _is_status_only_query(user_text):
+            logger.info({"event": "mcp_inject_skipped", "reason": "status_only_query_free_or_ha"})
             return None
+
+        if is_free_model:
+            logger.info({"event": "mcp_inject_skipped", "reason": "free_model_no_agentic_loop"})
+            return tools if tools else None
 
         # Search results already injected. We used to skip tool injection here
         # to save prompt space, but users want to see explicit tool calls
@@ -2337,18 +2392,11 @@ def _inject_mcp_tools(
         else:
             ha_tools = get_ha_tools()
 
-        # When HA context is in the prompt, strip read-only HA tools so the
-        # LLM answers from context in 1 round.
-        # Control tools (ha_call_service, HassTurn*) are always kept.
+        # Keep all HA tools. We used to drop read-only tools here assuming the
+        # context was prefetched, but only ChatGPT Free actually prefetches.
+        # Gemini needs these tools to dynamically query states.
         if skip_ha_search:
-            drop_ha_tool_names = {"ha_search_entities", "ha_get_state", "GetLiveContext"}
-            if ha_tools:
-                ha_tools = [
-                    t for t in ha_tools
-                    if t.get("function", {}).get("name", "") not in drop_ha_tool_names
-                ]
-            logger.info({"event": "ha_read_tools_stripped", "reason": "registry_in_context"})
-
+            logger.info({"event": "ha_read_tools_kept", "reason": "model_needs_tools"})
         all_new_tools = mcp_tools + ha_tools
         if not all_new_tools:
             return tools if tools else None
