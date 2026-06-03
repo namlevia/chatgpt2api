@@ -246,20 +246,19 @@ def _build_context(states: list[dict]) -> str:
         by_domain.setdefault(domain, []).append(s)
 
     lines = [
-        "## Smart Home — Device Registry (DANH SÁCH THIẾT BỊ)",
-        f"{valid_count} thiết bị. Mỗi dòng: `tên | entity_id`.",
+        "## Smart Home — Trạng thái thiết bị (LIVE, làm mới ~60s/lần)",
+        f"{valid_count} thiết bị. Mỗi dòng: `tên | entity_id | trạng thái`.",
         "**CÁCH DÙNG:**",
-        "- Khi user hỏi trạng thái / liệt kê / có những X nào → PHẢI gọi `GetLiveContext` "
-        "trước để lấy trạng thái LIVE từ Home Assistant. KHÔNG ĐƯỢC trả lời "
-        "từ registry — dữ liệu dưới đây là STATIC, có thể đã cũ.",
+        "- Khi user hỏi trạng thái / liệt kê / tổng quan → TRẢ LỜI TRỰC TIẾP từ dữ "
+        "liệu bên dưới (mỗi dòng đã kèm sẵn trạng thái). TUYỆT ĐỐI KHÔNG gọi "
+        "`GetLiveContext` hay tool đọc nào nữa — dữ liệu này CHÍNH LÀ trạng thái hiện tại.",
         "- Khi user yêu cầu điều khiển (bật/tắt/mở/đóng/đặt) → tìm entity_id trong "
         "registry bên dưới, rồi gọi `ha_call_service` MỘT LẦN với entity_id chính xác.",
         "",
-        "--- HƯỚNG DẪN HÀNH ĐỘNG BẮT BUỘC (SYSTEM OVERRIDE) ---",
-        "Khi người dùng hỏi về trạng thái nhà (VD: 'trạng thái nhà', 'chi tiết toàn bộ thiết bị'):",
-        "1. GỌI NGAY `GetLiveContext` để lấy trạng thái LIVE của toàn bộ thiết bị.",
-        "2. Dựa trên kết quả GetLiveContext, TỔNG HỢP VÀ BÁO CÁO các nhóm: Đèn, Quạt, Điều hoà, Cửa, Công tắc, Khóa.",
-        "3. BỎ QUA cảm biến (thời tiết, nhiệt độ, độ ẩm, contact) trừ khi được hỏi ĐÍCH DANH.",
+        "--- KHI HỎI TRẠNG THÁI NHÀ ('trạng thái nhà', 'chi tiết toàn bộ thiết bị') ---",
+        "1. TỔNG HỢP & BÁO CÁO NGAY từ dữ liệu dưới đây theo nhóm: Đèn, Quạt, Điều hoà, Cửa, Công tắc, Khóa.",
+        "2. BỎ QUA cảm biến (thời tiết, nhiệt độ, độ ẩm, contact) trừ khi được hỏi ĐÍCH DANH.",
+        "3. KHÔNG gọi bất kỳ tool đọc nào (GetLiveContext/ha_get_state/ha_search_entities) — trả lời thẳng.",
         "",
     ]
 

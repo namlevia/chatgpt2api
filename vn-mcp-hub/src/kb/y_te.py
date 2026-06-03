@@ -11,7 +11,7 @@ from src.rag.retriever import RAGRetriever
 from src.kb.hybrid_search import kb_ask
 
 mcp = FastMCP("kb_y_te")
-COLLECTION = "y_te"
+COLLECTION = "kb_y_te"
 
 
 @mcp.tool()

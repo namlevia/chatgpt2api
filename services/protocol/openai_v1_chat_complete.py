@@ -1064,9 +1064,10 @@ def _prefetch_ha_context_if_needed(
     if not tools:
         return messages
 
-    # Only pre-fetch if GetLiveContext is in the tool list
+    # Only pre-fetch if HA tools are available (so we know it's a smart home capable client)
     tool_names = {(t.get("function") or {}).get("name", "") for t in tools}
-    if "GetLiveContext" not in tool_names:
+    has_ha_tools = any(name.startswith("Hass") or name.startswith("ha_") or name == "GetLiveContext" for name in tool_names)
+    if not has_ha_tools:
         return messages
 
     # Only pre-fetch if user query is about device state
@@ -2288,26 +2289,17 @@ def _inject_mcp_tools(
         else:
             ha_tools = get_ha_tools()
 
-        # Only skip MCP for HA-native clients (Hass* tools already in context)
-        # For normal chat: include all tools, let the model decide
-        if client_is_ha:
-            mcp_tools = []
-
         # When HA context is in the prompt, strip read-only HA tools so the
-        # LLM answers from context in 1 round. However, when the context was
-        # file-uploaded (entity registry >80KB), the model may not see full
-        # state data inline — keep GetLiveContext so it can fetch live data.
+        # LLM answers from context in 1 round.
         # Control tools (ha_call_service, HassTurn*) are always kept.
         if skip_ha_search:
-            drop_ha_tool_names = {"ha_search_entities", "ha_get_state"}
+            drop_ha_tool_names = {"ha_search_entities", "ha_get_state", "GetLiveContext"}
             if ha_tools:
                 ha_tools = [
                     t for t in ha_tools
                     if t.get("function", {}).get("name", "") not in drop_ha_tool_names
                 ]
-            # Keep GetLiveContext in tools — model only calls it when
-            # context lacks the data it needs (e.g. after RTK compression).
-            logger.info({"event": "ha_read_tools_stripped", "reason": "registry_in_context", "keep_getlivecontext": True})
+            logger.info({"event": "ha_read_tools_stripped", "reason": "registry_in_context"})
 
         all_new_tools = mcp_tools + ha_tools
         if not all_new_tools:

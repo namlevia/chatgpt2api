@@ -11,7 +11,7 @@ from src.rag.retriever import RAGRetriever
 from src.kb.hybrid_search import kb_ask
 
 mcp = FastMCP("kb_ngoai_ngu")
-COLLECTION = "ngoai_ngu"
+COLLECTION = "kb_ngoai_ngu"
 
 
 @mcp.tool()
