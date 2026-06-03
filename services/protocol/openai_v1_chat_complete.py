@@ -1212,11 +1212,28 @@ def _prefetch_ha_context_if_needed(
         "Trả lời NGAY dựa trên dữ liệu trên. Ngắn gọn, không chào hỏi, không hỏi thêm."
     )
 
-    # Strip static Device Registry — live data replaces it
+    # Strip static Device Registry (server's own) — live prefetch replaces it.
+    # ALSO trim HA's own exposed-entity dump: when ~600+ entities are exposed to
+    # Assist, HA appends a 40KB+ "areas and the devices in this smart home" YAML
+    # list to the system prompt. chatgpt.com free can't take that much (502/413),
+    # and our compact live prefetch above already carries the states, so cut the
+    # list (keep the instructions before it). Targeted control still works — the
+    # prefetch search resolves the specific entity by keyword.
+    _HA_ASSIST_MARKER = "areas and the devices in this smart home"
     cleaned_messages = []
     for m in messages:
-        if m.get("role") == "system" and "Device Registry" in str(m.get("content", "")):
+        content = str(m.get("content", ""))
+        if m.get("role") == "system" and "Device Registry" in content:
             logger.info({"event": "ha_prefetch_strip_registry", "reason": "live_context_available"})
+            continue
+        if m.get("role") == "system" and _HA_ASSIST_MARKER in content:
+            idx = content.find(_HA_ASSIST_MARKER)
+            # back up to the start of that line so we drop the whole header line
+            line_start = content.rfind("\n", 0, idx)
+            trimmed = (content[:line_start] if line_start > 0 else content[:idx]).rstrip()
+            logger.info({"event": "ha_prefetch_trim_assist_entities",
+                         "removed_chars": len(content) - len(trimmed)})
+            cleaned_messages.append({**m, "content": trimmed})
             continue
         cleaned_messages.append(m)
     messages = cleaned_messages
