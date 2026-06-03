@@ -42,6 +42,14 @@ DEFAULT_CLIENT_BUILD_NUMBER = "5955942"
 DEFAULT_POW_SCRIPT = "https://chatgpt.com/backend-api/sentinel/sdk.js"
 CODEX_IMAGE_MODEL = "codex-gpt-image-2"
 
+# Cache the homepage-derived PoW script references across requests. A new
+# OpenAIBackendAPI is built per request, so _bootstrap() otherwise GETs
+# chatgpt.com's full homepage on EVERY call — a redundant round-trip whose cost
+# dominates when those (free) accounts are throttled (vision went 5-8s → 15-36s).
+# The refs are global to chatgpt.com and change only on their web deploys.
+_BOOTSTRAP_CACHE: Dict[str, Any] = {"sources": None, "build": None, "ts": 0.0}
+_BOOTSTRAP_TTL = 600  # 10 minutes
+
 
 class OpenAIBackendAPI:
     """ChatGPT Web 后端封装。
@@ -1018,7 +1026,19 @@ class OpenAIBackendAPI:
             response.close()
 
     def _bootstrap(self) -> None:
-        """预热首页，并提取 PoW 相关脚本引用。"""
+        """预热首页，并提取 PoW 相关脚本引用。
+
+        Cached for _BOOTSTRAP_TTL across requests — the homepage GET is otherwise
+        repeated on every call (OpenAIBackendAPI is per-request) and is the
+        redundant round-trip that slows chatgpt.com free requests, vision in
+        particular. PoW refs are global and rarely change.
+        """
+        now = time.time()
+        c = _BOOTSTRAP_CACHE
+        if c["sources"] and (now - c["ts"]) < _BOOTSTRAP_TTL:
+            self.pow_script_sources = c["sources"]
+            self.pow_data_build = c["build"]
+            return
         response = self.session.get(
             self.base_url + "/",
             headers=self._bootstrap_headers(),
@@ -1028,6 +1048,9 @@ class OpenAIBackendAPI:
         self.pow_script_sources, self.pow_data_build = parse_pow_resources(response.text)
         if not self.pow_script_sources:
             self.pow_script_sources = [DEFAULT_POW_SCRIPT]
+        _BOOTSTRAP_CACHE.update(
+            sources=self.pow_script_sources, build=self.pow_data_build, ts=now
+        )
 
     def _get_chat_requirements(self) -> ChatRequirements:
         """获取当前模式对话所需的 sentinel token。"""
