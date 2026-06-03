@@ -246,7 +246,7 @@ def _build_context(states: list[dict]) -> str:
         by_domain.setdefault(domain, []).append(s)
 
     lines = [
-        "## Smart Home — Trạng thái thiết bị (LIVE, làm mới ~60s/lần)",
+        "## Smart Home — Device Registry — Trạng thái thiết bị (LIVE, làm mới ~60s/lần)",
         f"{valid_count} thiết bị. Mỗi dòng: `tên | entity_id | trạng thái`.",
         "**CÁCH DÙNG:**",
         "- Khi user hỏi trạng thái / liệt kê / tổng quan → TRẢ LỜI TRỰC TIẾP từ dữ "
