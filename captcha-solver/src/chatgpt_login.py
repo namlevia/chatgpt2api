@@ -243,6 +243,34 @@ async def _scrape_chatgpt_token(page) -> tuple[Optional[str], Optional[str], Opt
     captured_email = None
     access_token_preview = None
 
+    # Preferred: /api/auth/session returns the real Bearer accessToken that
+    # chatgpt.com/backend-api accepts. (Scanning localStorage/cookies below
+    # grabbed the wrong eyJ value / the opaque NextAuth session cookie, which
+    # decodes to an empty payload and gets 401 "could not parse" from the API.)
+    try:
+        result = await page.evaluate(
+            """async () => {
+                try {
+                    const r = await fetch('/api/auth/session', { credentials: 'include' });
+                    const t = await r.text();
+                    try { return { status: r.status, json: JSON.parse(t) }; }
+                    catch (e) { return { status: r.status }; }
+                } catch (e) { return { status: 0, error: String(e) }; }
+            }"""
+        )
+        if isinstance(result, dict) and result.get("status") == 200:
+            j = result.get("json") or {}
+            at = j.get("accessToken")
+            if isinstance(at, str) and at.startswith("eyJ"):
+                access_token = at
+                access_token_preview = at[:40] + "..."
+                user = j.get("user") or {}
+                if isinstance(user, dict) and user.get("email"):
+                    captured_email = user.get("email")
+                logger.info("chatgpt_login: got accessToken from /api/auth/session")
+    except Exception:
+        pass
+
     # Try localStorage / sessionStorage first
     for storage_key in ("localStorage", "sessionStorage"):
         try:
@@ -256,7 +284,7 @@ async def _scrape_chatgpt_token(page) -> tuple[Optional[str], Optional[str], Opt
                     return null;
                 }})()"""
             )
-            if token:
+            if token and not access_token:
                 logger.info("chatgpt_login: found JWT in %s", storage_key)
                 access_token = token
                 access_token_preview = token[:40] + "..." if len(token) > 40 else token
@@ -311,6 +339,11 @@ class ChatGPTOnboardSession:
     access_token_preview: Optional[str] = None
     totp_secret: str = ""
     pending_code: Optional[str] = None
+    prefer_method: str = "auth"
+    # When True + the profile already has a Google session, skip the Google
+    # login (and the profile nuke) — ChatGPT rides the existing SSO cookie.
+    reuse_session: bool = False
+    completed_at: Optional[float] = None
     started_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> dict:
@@ -337,30 +370,63 @@ def get_session(profile: str) -> Optional[ChatGPTOnboardSession]:
     return _sessions.get(profile)
 
 
+async def _has_google_session(profile: str) -> bool:
+    """Best-effort: does `profile` already hold Google SSO cookies? Read-only —
+    never wipes. Lets ChatGPT ride a Google session that a prior Gemini/Flow/
+    auto-login established on the same profile (reuse_session mode)."""
+    try:
+        ctx = pool.get_cached(profile)
+        if ctx is None:
+            ctx = await pool.get(profile=profile, headless=False)
+        cookies = await ctx.cookies()
+        names = {c.get("name") for c in cookies}
+        return any(ck in names for ck in _GOOGLE_LOGIN_COOKIES)
+    except Exception as exc:
+        logger.warning("chatgpt_login: google-session probe failed for %s: %s", profile, exc)
+        return False
+
+
 async def start_chatgpt_onboard(
     profile: str = "chatgpt-default",
     email: str = "",
     password: str = "",
     totp_secret: str = "",
+    reuse_session: bool = False,
 ) -> ChatGPTOnboardSession:
-    """Launch ChatGPT onboard in background. Returns immediately with initial state."""
+    """Launch ChatGPT onboard in background. Returns immediately with initial state.
+
+    reuse_session=True + an existing Google session on the profile → skip the
+    Google login AND the profile nuke, going straight to ChatGPT SSO. Lets
+    multi-onboard add ChatGPT without a second Google 2FA. Default False keeps
+    the original fresh-login behavior exactly."""
+    # Derive 2FA path: Authenticator(TOTP) when a secret is saved, else fall
+    # to device-tap (need_tap) — user approves "Yes, it's me" on their phone.
+    _prefer = "auth" if (totp_secret and totp_secret.strip()) else "tap"
     session = ChatGPTOnboardSession(
         profile=profile,
         email=email,
         totp_secret=totp_secret,
+        prefer_method=_prefer,
+        reuse_session=reuse_session,
         state="starting",
         message="Khoi dong trinh duyet...",
     )
     _sessions[profile] = session
 
-    # Kill any existing browser context and nuke old profile.
-    # We must wait for Chrome processes to fully exit before deleting,
-    # otherwise shutil.rmtree fails silently (ignore_errors=True) and
-    # the new context reuses old cookies → Google skips login screen.
-    await pool.close_profile(profile)
-    await _nuke_profile(profile)
+    if reuse_session and await _has_google_session(profile):
+        # Keep the existing Google cookies — that's what reuse mode is for.
+        logger.info("chatgpt_login: reuse_session + Google session present for %s — skipping nuke", profile)
+        session.message = "Tai su dung session Google san co..."
+    else:
+        # Kill any existing browser context and nuke old profile.
+        # We must wait for Chrome processes to fully exit before deleting,
+        # otherwise shutil.rmtree fails silently (ignore_errors=True) and
+        # the new context reuses old cookies → Google skips login screen.
+        session.reuse_session = False
+        await pool.close_profile(profile)
+        await _nuke_profile(profile)
 
-    asyncio.create_task(_run_onboard(session, password))
+    asyncio.create_task(_run_onboard_v2(session, password))
     return session
 
 
@@ -1449,3 +1515,147 @@ async def _run_onboard(session: ChatGPTOnboardSession, password: str) -> None:
         logger.exception("chatgpt_login: onboard failed")
         session.state = "failed"
         session.error = str(exc)[:200]
+
+
+
+async def _run_onboard_v2(session, password: str) -> None:
+    """Onboard via accounts.google.com-DIRECT (captcha-wait + auto pwd/TOTP via
+    auto_login.do_google_login_steps) then ChatGPT SSO (Continue-with-Google,
+    no captcha since Google already logged in) then scrape token. Replaces the
+    Auth0-first flow that hit Cloudflare. Proven flow from account #1."""
+    try:
+        async with pool.page(profile=session.profile, headless=False) as page:
+            ctx = page.context
+            from .auto_login import do_google_login_steps, click_google_oauth_consent
+            # Step 1: Google login DIRECT — skipped in reuse_session mode, where
+            # the profile already holds a Google session (multi-onboard / cross
+            # provider). Step 2's ChatGPT SSO rides that existing session.
+            if getattr(session, "reuse_session", False):
+                session.state = "running"
+                session.message = "Tai su dung Google session san co, bo qua login Google..."
+                logger.info("onboard_v2: reuse_session — skipping Google login")
+            else:
+                session.state = "running"
+                session.message = "Mo accounts.google.com..."
+                try:
+                    await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en",
+                                    wait_until="domcontentloaded", timeout=30_000)
+                except Exception:
+                    await page.goto("https://accounts.google.com/", wait_until="domcontentloaded", timeout=30_000)
+                await asyncio.sleep(2.5)
+                ok = await do_google_login_steps(session, page, ctx, password,
+                                                 prefer_method=session.prefer_method or "auth")
+                if not ok:
+                    if session.state != "failed":
+                        session.state = "failed"
+                        session.error = session.error or "Google login failed"
+                    session.completed_at = time.time()
+                    return
+            # Step 2: ChatGPT SSO via chatgpt.com (proper OAuth params, unlike
+            # auth.openai.com/u/login which lacks client_id/redirect_uri).
+            session.state = "running"
+            session.message = "Dang nhap ChatGPT (Continue with Google)..."
+            await page.goto("https://chatgpt.com/auth/login", wait_until="domcontentloaded", timeout=45_000)
+            await asyncio.sleep(4.0)
+            # Some variants land on the marketing page → click the login button.
+            for _lsel in ('[data-testid="login-button"]', 'button:has-text("Log in")',
+                          'button:has-text("Dang nhap")', 'button:has-text("Đăng nhập")'):
+                try:
+                    await page.locator(_lsel).first.click(timeout=3000)
+                    await asyncio.sleep(3.0)
+                    break
+                except Exception:
+                    continue
+            # Click "Continue with Google" — button renders after redirect to
+            # auth.openai.com; loop because timing varies.
+            _g_clicked = False
+            for _ in range(20):
+                for _gsel in _GOOGLE_BTN_SELECTORS:
+                    try:
+                        _el = page.locator(_gsel).first
+                        if await _el.is_visible(timeout=800):
+                            await _el.click()
+                            logger.info("onboard_v2: clicked Continue-with-Google via %s", _gsel)
+                            _g_clicked = True
+                            break
+                    except Exception:
+                        continue
+                if _g_clicked:
+                    break
+                await asyncio.sleep(1.5)
+            await asyncio.sleep(3.0)
+            # Google account picker / consent (logged-in session → auto-pick).
+            await asyncio.sleep(3.0)
+            # Step 2b+3: poll loop — handle Google account-picker / consent +
+            # ChatGPT workspace picker, retry scrape until a DECODABLE token
+            # appears. Scraping too early returned garbage (SSO not finished).
+            import base64 as _b64x, json as _jsonx
+            def _decodes_ok(t):
+                try:
+                    _p = t.split(".")[1]; _p += "=" * (-len(_p) % 4)
+                    return bool(_jsonx.loads(_b64x.urlsafe_b64decode(_p)))
+                except Exception:
+                    return False
+            token = None; email = None; preview = None
+            for _poll in range(40):
+                _u = page.url or ""
+                if "accounts.google.com" in _u:
+                    try:
+                        await page.evaluate(
+                            """(em) => {
+                                const els = Array.from(document.querySelectorAll('div[data-identifier],li,div[role=link],div[role=button],a,div[jsname]'));
+                                for (const e of els) {
+                                    const id = (e.getAttribute('data-identifier')||'').toLowerCase();
+                                    if (id && id === em) { e.click(); return 'id'; }
+                                }
+                                for (const e of els) {
+                                    if ((e.innerText||'').toLowerCase().includes(em)) { e.click(); return 'text'; }
+                                }
+                                return null;
+                            }""", session.email.lower())
+                    except Exception:
+                        pass
+                    try:
+                        await click_google_oauth_consent(page, timeout=3)
+                    except Exception:
+                        pass
+                if "chatgpt.com" in _u:
+                    try:
+                        await page.evaluate(
+                            """(em) => {
+                                const btns = Array.from(document.querySelectorAll('button,a,div[role=button]'));
+                                for (const b of btns) { if ((b.innerText||'').toLowerCase().includes(em)) { b.click(); return 'email'; } }
+                                for (const b of btns) { const t=(b.innerText||'').toLowerCase(); if (t.includes('personal')||t.includes('cá nhân')) { b.click(); return 'personal'; } }
+                                return null;
+                            }""", session.email.lower())
+                    except Exception:
+                        pass
+                    try:
+                        token, email, preview = await _scrape_chatgpt_token(page)
+                    except Exception:
+                        token = None
+                    if token and _decodes_ok(token):
+                        break
+                    token = None
+                session.message = "Dang hoan tat SSO ChatGPT... (%d)" % _poll
+                await asyncio.sleep(3.0)
+            if token and _decodes_ok(token):
+                session.access_token = token
+                session.access_token_preview = preview
+                session.captured_email = email or session.email
+                session.state = "success"
+                session.message = "Dang nhap thanh cong"
+                try:
+                    from .main import _update_chatgpt2api_token as _upd
+                    await _upd(token)
+                except Exception:
+                    pass
+            else:
+                session.state = "failed"
+                session.error = "ChatGPT SSO chua hoan tat (token rac/khong co) - kiem tra noVNC"
+            session.completed_at = time.time()
+    except Exception as exc:
+        session.state = "failed"
+        session.error = ("onboard_v2 error: %s" % exc)[:200]
+        session.completed_at = time.time()
+        logger.exception("onboard_v2 failed")

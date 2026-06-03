@@ -548,8 +548,19 @@ async def do_google_login_steps(
     # ── Email step ──
     session.message = "Điền email..."
     try:
-        email_input = page.locator('input[type="email"]').first
-        await email_input.wait_for(state="visible", timeout=15_000)
+        email_input = None
+        for _sel in ('input[type="email"]', 'input#identifierId',
+                     'input[name="identifier"]', 'input[autocomplete="username"]',
+                     'input[autocomplete="email"]'):
+            try:
+                _loc = page.locator(_sel).first
+                await _loc.wait_for(state="visible", timeout=10_000)
+                email_input = _loc
+                break
+            except Exception:
+                continue
+        if email_input is None:
+            raise RuntimeError("email field not found (tried 5 selectors)")
         await email_input.fill(session.email)
         await asyncio.sleep(0.8)
         # v3 page uses different Next button patterns
@@ -594,18 +605,59 @@ async def do_google_login_steps(
     except Exception:
         pass
 
-    # ── Password step ──
+    # ── Captcha-aware Password step ──
+    # Google may insert an image captcha on the email page. The browser can't
+    # read it, so we poll for up to 4 minutes: if a captcha is showing we flag
+    # need_captcha (user solves it on noVNC) and keep waiting; as soon as the
+    # password field appears we auto-fill it. Robust selectors handle Google's
+    # markup variants.
     session.message = "Điền mật khẩu..."
+    _PWD_SELECTORS = ('input[type="password"]', 'input[name="Passwd"]',
+                      'input[autocomplete="current-password"]', 'input[name="password"]')
+    _CAPTCHA_SELECTORS = ('img#captchaimg', 'img[src*="Captcha"]', 'input[name="ca"]',
+                          'input[aria-label*="văn bản" i]', 'input[aria-label*="hear" i]')
+    pwd_input = None
+    captcha_flagged = False
+    pwd_deadline = time.time() + 240
+    while time.time() < pwd_deadline:
+        for _sel in _PWD_SELECTORS:
+            try:
+                _loc = page.locator(_sel).first
+                if await _loc.is_visible(timeout=1200):
+                    pwd_input = _loc
+                    break
+            except Exception:
+                continue
+        if pwd_input is not None:
+            break
+        # captcha present? flag once so the user knows to solve it on noVNC
+        if not captcha_flagged:
+            for _csel in _CAPTCHA_SELECTORS:
+                try:
+                    if await page.locator(_csel).first.is_visible(timeout=800):
+                        session.state = "need_captcha"
+                        session.message = "Google yêu cầu captcha — gõ captcha trên noVNC, hệ thống sẽ TỰ tiếp tục password+2FA"
+                        logger.info("auto_login: captcha detected for %s, waiting manual solve", session.profile)
+                        captcha_flagged = True
+                        break
+                except Exception:
+                    continue
+        await asyncio.sleep(2.0)
+    if pwd_input is None:
+        session.state = "failed"
+        session.error = "Không thấy ô mật khẩu (captcha chưa giải hoặc Google chặn)"
+        session.completed_at = time.time()
+        return False
     try:
-        pwd_input = page.locator('input[type="password"]').first
-        await pwd_input.wait_for(state="visible", timeout=15_000)
-        await asyncio.sleep(0.8)
+        session.state = "running"
+        session.message = "Điền mật khẩu..."
+        await asyncio.sleep(0.6)
         await pwd_input.fill(password)
         await asyncio.sleep(0.6)
         await _safe_click(page, '#passwordNext button', 'span[jsname="V67aGc"]', 'button[jsname="LgbsSe"]:visible')
     except Exception as exc:
         session.state = "failed"
-        session.error = f"Không điền được mật khẩu (Google có thể đã chặn): {exc}"
+        session.error = f"Không điền được mật khẩu: {exc}"
         session.completed_at = time.time()
         return False
 

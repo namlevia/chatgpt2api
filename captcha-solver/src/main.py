@@ -92,50 +92,9 @@ def require_api_key(authorization: str | None = Header(default=None)) -> None:
         raise HTTPException(status_code=401, detail="invalid api key")
 
 
-async def _auto_warmup() -> None:
-    """Warm up browser profiles for all saved accounts on startup.
-
-    Pre-opens Gemini Web + Flow tabs so the first request for each
-    profile hits an already-ready browser (saves 3-5s cold start).
-    """
-    try:
-        await asyncio.sleep(2.0)  # let pool fully settle
-        accounts = list_accounts()
-        profiles: set[str] = set()
-
-        for acct in accounts:
-            email = acct.get("email", "")
-            if email and "@" in email:
-                localpart = email.split("@")[0]
-                profiles.add(f"gemini-web-{localpart}")
-                profiles.add(f"google-{localpart}")
-
-        if not profiles:
-            profiles = {"gemini-web-default", "google-fx"}
-
-        logger.info("auto-warmup: warming %d profiles: %s", len(profiles), sorted(profiles))
-
-        for profile in sorted(profiles):
-            try:
-                if profile.startswith("gemini-web-"):
-                    url = "https://gemini.google.com/app"
-                else:
-                    url = "https://labs.google/fx/vi/tools/flow"
-
-                async with pool.page(profile=profile, headless=False) as page:
-                    if not page.url.startswith(url):
-                        await page.goto(url, wait_until="domcontentloaded", timeout=30_000)
-                logger.info("auto-warmup: warmed %s", profile)
-            except Exception as exc:
-                logger.warning("auto-warmup: failed %s: %s", profile, exc)
-    except Exception as exc:
-        logger.warning("auto-warmup: %s", exc)
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await pool.start()
-    asyncio.create_task(_auto_warmup())
     yield
     await pool.stop()
 
@@ -218,12 +177,13 @@ class MultiOnboardReq(BaseModel):
     profile: str = "google-multi"
     email: str
     password: str
-    totp_secret: str = ""
     # Same as AutoLoginReq.prefer_method but applied across all services.
     prefer_method: str = "auth"
-    # Subset of {"gemini_web", "flow"}. Order matters — we
+    # Subset of {"gemini_web", "flow", "chatgpt"}. Order matters — we
     # trigger them sequentially after the shared Google login succeeds.
-    services: list[str] = Field(default_factory=lambda: ["gemini_web", "flow"])
+    # chatgpt rides the shared Google session (reuse_session=True) so it
+    # never re-nukes the profile or asks for a second 2FA.
+    services: list[str] = Field(default_factory=lambda: ["gemini_web", "flow", "chatgpt"])
 
 
 class TwoFactorCodeReq(BaseModel):
@@ -635,7 +595,6 @@ async def _run_multi(req: MultiOnboardReq) -> None:
             email=req.email,
             password=req.password,
             prefer_method=req.prefer_method,
-            totp_secret=req.totp_secret,
         )
         deadline = time.time() + 360
         while time.time() < deadline:
@@ -665,12 +624,40 @@ async def _run_multi(req: MultiOnboardReq) -> None:
                 if svc == "gemini_web":
                     s = await start_gemini_web_login(
                         profile=req.profile, email=req.email, password=req.password,
-                        totp_secret=req.totp_secret,
                     )
                 elif svc == "flow":
                     # Flow login = Google session + open labs.google. The
                     # existing Google session is enough; we just record success.
                     state["results"][svc] = {"state": "success", "note": "uses shared Google session"}
+                    continue
+                elif svc == "chatgpt":
+                    # ChatGPT rides the shared Google session via reuse_session
+                    # (no profile nuke, no 2nd 2FA) — just SSO + scrape JWT.
+                    await start_chatgpt_onboard(
+                        profile=req.profile, email=req.email, password=req.password,
+                        reuse_session=True,
+                    )
+                    cgpt_deadline = time.time() + 240
+                    while time.time() < cgpt_deadline:
+                        await _asyncio.sleep(2)
+                        cur = get_chatgpt_session(req.profile)
+                        if cur is None:
+                            continue
+                        if cur.state == "success":
+                            state["results"][svc] = {
+                                "state": "success",
+                                "token": getattr(cur, "access_token", None),
+                                "email": getattr(cur, "captured_email", None) or req.email,
+                            }
+                            break
+                        if cur.state in ("failed", "error"):
+                            state["results"][svc] = {
+                                "state": "failed",
+                                "error": cur.error or cur.message,
+                            }
+                            break
+                    else:
+                        state["results"][svc] = {"state": "failed", "error": "timeout"}
                     continue
                 else:
                     state["results"][svc] = {"state": "skipped", "error": "unknown service"}
@@ -737,8 +724,6 @@ async def api_multi_onboard(req: MultiOnboardReq) -> dict[str, Any]:
         "services": list(req.services),
     })
     _asyncio.create_task(_run_multi(req))
-    try: save_account(req.email, req.password, req.totp_secret, "")
-    except Exception: pass
     return {
         "profile": req.profile,
         "stage": state["stage"],
@@ -805,7 +790,7 @@ async def api_session_warmup(profile: str, provider: str = "gemini_web") -> dict
     try:
         url_map = {
             "gemini_web": "https://gemini.google.com/app",
-            "flow": "https://labs.google/fx/vi/tools/flow"
+            "flow": "https://aistudio.google.com/"
         }
         target_url = url_map.get(provider, "")
         
@@ -1250,7 +1235,6 @@ async def _auto_refresh_loop(interval_minutes: int = 30):
 
                 # Scrape failed — full re-login
                 try:
-                    from .accounts_db import get_account as db_get_account
                     full = db_get_account(email)
                     if not full:
                         continue
@@ -1410,3 +1394,30 @@ async def api_accounts_delete(email: str) -> dict[str, Any]:
     if not ok:
         raise HTTPException(404, "Account not found")
     return {"ok": True, "email": email}
+
+
+@app.delete("/v1/profiles/{profile}", dependencies=[Depends(require_api_key)])
+async def api_delete_profile(profile: str) -> dict[str, Any]:
+    """Close (if open) then PERMANENTLY delete a profile's user-data-dir.
+
+    chatgpt2api calls this when an account is removed so the on-disk browser
+    profile doesn't linger after a UI delete (the orphaned-profile desync).
+    Irreversible — the login session for that profile is lost.
+    """
+    import shutil
+    if not profile or "/" in profile or "\\" in profile or profile in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid profile name")
+    try:
+        await pool.close_profile(profile)
+    except Exception:
+        logger.warning("close before delete failed for profile=%s", profile)
+    profile_dir = settings.data_dir / "profiles" / profile
+    if not profile_dir.exists():
+        return {"profile": profile, "deleted": False, "reason": "not_found"}
+    try:
+        shutil.rmtree(profile_dir)
+    except Exception as exc:
+        logger.exception("Failed to delete profile dir")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    logger.info("deleted profile dir profile=%s", profile)
+    return {"profile": profile, "deleted": True}

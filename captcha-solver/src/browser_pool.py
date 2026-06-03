@@ -383,8 +383,6 @@ class BrowserPool:
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
                     "--disable-popup-blocking",
-                    "--disable-web-security",
-                    "--disable-features=IsolateOrigins,site-per-process",
                 ],
                 ignore_default_args=["--enable-automation"],
                 channel="chrome",
