@@ -396,12 +396,14 @@ export function FlowCard() {
   }
 
   async function startAutoLogin() {
-    const profile = draft.profile.trim();
-    if (!profile) { toast.error("Cần điền profile trước"); return; }
     if (!autoLogin.email.trim() || !autoLogin.password) {
       toast.error("Cần điền email + mật khẩu");
       return;
     }
+    // Same account-centric profile as 1-click → "Chỉ đăng nhập" và "Tự động
+    // setup" dùng chung MỘT profile cho mỗi Google account (clean reuse).
+    const local = (autoLogin.email.split("@")[0] || "fx").replace(/[^a-z0-9-]/gi, "-");
+    const profile = `google-${local}`;
     stopPolling();
     try {
       const res = await fetch(`${cfg.captcha_solver_url}/v1/session/auto-login`, {
@@ -599,19 +601,7 @@ export function FlowCard() {
           </div>
         )}
 
-        {/* Reuse existing profile (Cách A) */}
-        <div className="space-y-1 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
-          <p className="text-xs font-semibold text-emerald-800">Tái dùng profile đã onboard</p>
-          <p className="text-[10px] text-emerald-700/70 leading-relaxed">
-            Chọn profile Google đã có session (Flow/ChatGPT/Gemini) → tự lấy project_id + thêm vào pool, không cần đăng nhập.
-          </p>
-          <ReuseProfilePicker
-            cs={{ url: cfg.captcha_solver_url, apiKey: cfg.captcha_solver_api_key }}
-            onReuse={reuseAccount}
-          />
-        </div>
-
-        {/* Add new account */}
+        {/* Add new account (advanced / manual project_id) */}
         <div className="space-y-2 rounded-xl border border-dashed border-emerald-300 bg-white/40 p-3">
           <p className="text-xs font-semibold text-emerald-800">+ Thêm tài khoản mới</p>
           <div className="grid gap-2 sm:grid-cols-3">
@@ -793,152 +783,69 @@ export function FlowCard() {
               </div>
             )}
           </div>
-          <div className="flex gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 rounded-lg text-[11px]"
-              onClick={handleSaveAccount}
-              disabled={isSavingAccount || !autoLogin.email.trim() || !autoLogin.password}
-            >
-              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
-              Lưu tài khoản
-            </Button>
-          </div>
-          <Button
-            className="w-full h-9 rounded-lg bg-gradient-to-r from-fuchsia-600 to-cyan-600 px-3 text-xs font-bold text-white hover:from-fuchsia-700 hover:to-cyan-700 shadow-lg shadow-fuchsia-200"
-            onClick={oneClickAddAccount}
-            disabled={oneClickRunning}
-          >
-            {oneClickRunning
-              ? <><LoaderCircle className="size-3.5 animate-spin" /> Đang chạy…</>
-              : <><Sparkles className="size-3.5" /> Tự động setup (1-click)</>}
-          </Button>
-          {oneClickStep && (
-            <p className="text-[11px] text-fuchsia-800 bg-white/60 rounded-md px-2 py-1.5 font-mono">
-              {oneClickStep}
+          {/* Tái dùng profile đã onboard — đặt trong block onboard như ChatGPT */}
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2 space-y-1">
+            <p className="text-[11px] font-medium text-emerald-700">
+              Tái dùng profile đã onboard (Flow/Gemini/ChatGPT) — tự lấy project_id, không cần nhập lại email/mật khẩu:
             </p>
-          )}
-        </div>
-
-        {/* ── Auto-login CLI (login only — for advanced users) ── */}
-        <div className="space-y-2 rounded-xl border border-dashed border-indigo-300 bg-indigo-50/40 p-3">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-indigo-800 flex items-center gap-1.5">
-              <KeyRound className="size-3.5" /> Auto-login (CLI) — chỉ đăng nhập, không add pool
-            </p>
-            <span className="text-[10px] text-indigo-600/70">
-              dùng profile <code className="font-mono">{draft.profile || "—"}</code>
-            </span>
-          </div>
-          <p className="text-[10px] text-indigo-700/70 leading-relaxed">
-            Backend Playwright tự điền email + mật khẩu, dừng lại khi gặp 2FA để bạn nhập mã hoặc bấm xác minh trên điện thoại.
-            Nếu Google chặn (anti-bot), Chrome vẫn ở noVNC — bạn login thủ công nốt.
-          </p>
-          <SavedAccountsSelect
-            csUrl={cfg.captcha_solver_url}
-            csApiKey={cfg.captcha_solver_api_key}
-            selected={selectedAccount}
-            onSelect={(email, acct) => {
-              setSelectedAccount(email);
-              setAutoLogin({ email: acct.email, password: acct.password, code: "", totpSecret: acct.totp_secret || "" });
-            }}
-            disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
-            refreshKey={savedRefreshKey}
-          />
-          <div className="grid gap-2 sm:grid-cols-2">
-            <div>
-              <label className="text-[11px] text-stone-500">Email Google</label>
-              <Input
-                value={autoLogin.email}
-                onChange={(e) => setAutoLogin({ ...autoLogin, email: e.target.value })}
-                placeholder="you@gmail.com"
-                className="mt-1 h-8 rounded-lg border-stone-200 text-xs font-mono"
-                autoComplete="off"
-              />
-            </div>
-            <div>
-              <label className="text-[11px] text-stone-500">Mật khẩu</label>
-              <div className="relative">
-                <Input
-                  type={showPassword ? "text" : "password"}
-                  value={autoLogin.password}
-                  onChange={(e) => setAutoLogin({ ...autoLogin, password: e.target.value })}
-                  placeholder="••••••••"
-                  className="mt-1 h-8 rounded-lg border-stone-200 text-xs font-mono pr-8"
-                  autoComplete="off"
-                />
-                <button
-                  type="button"
-                  className="absolute right-1.5 top-1/2 -translate-y-1/2 text-stone-400 hover:text-stone-600"
-                  onClick={() => setShowPassword(!showPassword)}
-                  tabIndex={-1}
-                >
-                  {showPassword ? <EyeOff className="size-3.5" /> : <Eye className="size-3.5" />}
-                </button>
-              </div>
-            </div>
-          </div>
-          <div>
-            <label className="text-[11px] text-stone-500 flex items-center gap-1">
-              <Shield className="size-3" /> TOTP Secret
-            </label>
-            <Input
-              value={autoLogin.totpSecret}
-              onChange={(e) => setAutoLogin({ ...autoLogin, totpSecret: e.target.value })}
-              placeholder="xxxx xxxx xxxx xxxx xxxx xxxx xxxx xxxx"
-              className="mt-1 h-8 rounded-lg border-amber-200 text-xs font-mono bg-amber-50/30"
-              autoComplete="off"
-              disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
+            <ReuseProfilePicker
+              cs={{ url: cfg.captcha_solver_url, apiKey: cfg.captcha_solver_api_key }}
+              onReuse={reuseAccount}
             />
-            {totpCode && (
-              <div className="mt-1 flex items-center gap-2">
-                <span className="text-[11px] text-amber-700">Mã hiện tại:</span>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-900 font-mono text-sm font-bold tracking-widest">
-                  {totpCode}
-                </span>
-                <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
-              </div>
-            )}
-          </div>
-          <div className="flex gap-2 pt-1">
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 rounded-lg text-[11px]"
-              onClick={handleSaveAccount}
-              disabled={isSavingAccount || !autoLogin.email.trim() || !autoLogin.password}
-            >
-              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
-              Lưu tài khoản
-            </Button>
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
-              className="h-8 rounded-lg bg-indigo-600 px-3 text-xs text-white hover:bg-indigo-700"
-              onClick={startAutoLogin}
-              disabled={loginSession?.state === "running" || loginSession?.state === "starting"}
+              type="button"
+              size="sm"
+              variant="outline"
+              className="h-7 rounded-lg text-[11px]"
+              onClick={handleSaveAccount}
+              disabled={isSavingAccount || !autoLogin.email.trim() || !autoLogin.password}
             >
-              {loginSession?.state === "running" || loginSession?.state === "starting"
-                ? <LoaderCircle className="size-3.5 animate-spin" />
-                : <KeyRound className="size-3.5" />}
-              Bắt đầu auto-login
+              {isSavingAccount ? <LoaderCircle className="mr-1 size-3 animate-spin" /> : null}
+              Lưu tài khoản
+            </Button>
+            <Button
+              className="h-9 rounded-lg bg-gradient-to-r from-fuchsia-600 to-cyan-600 px-3 text-xs font-bold text-white hover:from-fuchsia-700 hover:to-cyan-700 shadow-lg shadow-fuchsia-200"
+              onClick={oneClickAddAccount}
+              disabled={oneClickRunning}
+            >
+              {oneClickRunning
+                ? <><LoaderCircle className="size-3.5 animate-spin" /> Đang chạy…</>
+                : <><Sparkles className="size-3.5" /> Tự động setup (1-click)</>}
+            </Button>
+            <Button
+              className="h-9 rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+              onClick={startAutoLogin}
+              disabled={oneClickRunning || loginSession?.state === "running" || loginSession?.state === "starting" || !autoLogin.email.trim() || !autoLogin.password}
+              title="Chỉ đăng nhập Google vào profile, KHÔNG add vào pool. Sau đó dùng nút Tái dùng để thêm vào Flow."
+            >
+              <KeyRound className="size-3.5" /> Chỉ đăng nhập
+            </Button>
+            <Button
+              className="h-9 rounded-lg border border-fuchsia-200 bg-white px-3 text-xs text-fuchsia-700 hover:bg-fuchsia-50"
+              onClick={openNoVNC}
+            >
+              <ExternalLink className="size-3.5" /> Mở noVNC
             </Button>
             {loginSession && loginSession.state !== "none" && (
               <Button
-                className="h-8 rounded-lg border border-stone-200 bg-white px-3 text-xs text-stone-600 hover:bg-stone-50"
+                className="h-9 rounded-lg border border-stone-200 bg-white px-3 text-xs text-stone-600 hover:bg-stone-50"
                 onClick={cancelLoginSession}
               >
                 <X className="size-3.5" /> Đóng phiên
               </Button>
             )}
           </div>
+          {oneClickStep && (
+            <p className="text-[11px] text-fuchsia-800 bg-white/60 rounded-md px-2 py-1.5 font-mono">
+              {oneClickStep}
+            </p>
+          )}
 
-          {/* Status panel — chỉ hiện khi có phiên */}
+          {/* Trạng thái đăng nhập (2FA / tiến trình) — chung cho 1-click & Chỉ đăng nhập */}
           {loginSession && loginSession.state !== "none" && (
-            <div className={`mt-2 rounded-lg border p-3 text-xs space-y-2 ${
+            <div className={`mt-1 rounded-lg border p-3 text-xs space-y-2 ${
               loginSession.state === "success" ? "border-emerald-300 bg-emerald-50/70"
               : loginSession.state === "failed" ? "border-rose-300 bg-rose-50/70"
               : loginSession.state === "need_tap" ? "border-violet-300 bg-violet-50/70"

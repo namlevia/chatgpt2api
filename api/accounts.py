@@ -513,7 +513,7 @@ def create_router() -> APIRouter:
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
         # Snapshot accounts BEFORE deletion so we can derive each one's
-        # captcha-solver browser profile (chatgpt-<email-localpart>) and remove
+        # captcha-solver browser profile (google-<email-localpart>) and remove
         # it too — otherwise a UI delete leaves an orphaned profile dir on disk
         # (the desync đại ca hit). Best-effort: API delete never fails on this.
         doomed = [account_service.get_account(t) for t in tokens]
