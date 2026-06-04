@@ -47,11 +47,30 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_VIEWPORT = {"width": 1366, "height": 768}
 
-# Chrome UA — used only for Chromium / CloakBrowser
+# Chrome UA — used only for Chromium / CloakBrowser.
+# The major version is detected from the actual Chrome binary so the UA string
+# always matches navigator.userAgentData / sec-ch-ua (Client Hints). A mismatch
+# — e.g. UA claims Chrome 130 while the binary (and Client Hints) report 148 —
+# is a reCAPTCHA Enterprise bot signal that Google began enforcing more strictly.
+def _detect_chrome_major(default: str = "148") -> str:
+    import re as _re
+    import subprocess as _sp
+    for _bin in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "chrome"):
+        try:
+            _out = _sp.run([_bin, "--version"], capture_output=True, text=True, timeout=5).stdout
+            _m = _re.search(r"\b(\d+)\.\d+", _out)
+            if _m:
+                return _m.group(1)
+        except Exception:
+            continue
+    return default
+
+
+_CHROME_MAJOR = _detect_chrome_major()
 _CHROME_USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/130.0.0.0 Safari/537.36"
+    f"Chrome/{_CHROME_MAJOR}.0.0.0 Safari/537.36"
 )
 
 # Firefox UA — used when settings.browser == "firefox" so Google serves

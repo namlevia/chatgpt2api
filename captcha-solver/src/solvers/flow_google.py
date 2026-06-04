@@ -36,8 +36,28 @@ DEFAULT_ASPECT = "IMAGE_ASPECT_RATIO_LANDSCAPE"
 DEFAULT_COUNT = 1
 API_HOST = "https://aisandbox-pa.googleapis.com"
 
-# Map friendly model names → Flow API enum values.
-# IMAGEN_4 isn't recognized by the API — it must be IMAGEN_3_5.
+# Aspect ratio labels in the Flow UI dropdown (Vietnamese locale).
+_ASPECT_LABELS = {
+    "IMAGE_ASPECT_RATIO_LANDSCAPE":      "16:9",
+    "IMAGE_ASPECT_RATIO_LANDSCAPE_4_3":  "4:3",
+    "IMAGE_ASPECT_RATIO_SQUARE":         "1:1",
+    "IMAGE_ASPECT_RATIO_PORTRAIT_3_4":   "3:4",
+    "IMAGE_ASPECT_RATIO_PORTRAIT":       "9:16",
+}
+
+# Flow UI model labels (matches the dropdown text in the screenshot).
+# IMPORTANT: Flow's API uses IMAGEN_3_5 internally even though the UI
+# shows "Imagen 4" — the user's captured request body confirmed this.
+_MODEL_LABELS = {
+    "NANO_BANANA_PRO": "Nano Banana Pro",
+    "NARWHAL":         "Nano Banana 2",
+    "IMAGEN_3_5":      "Imagen 4",
+    "IMAGEN_4":        "Imagen 4",  # back-compat alias
+}
+
+# When the request interceptor overrides imageModelName, map our friendly
+# constants to the actual Flow API enum values. IMAGEN_4 isn't recognized
+# by the Flow API — it must be IMAGEN_3_5.
 _MODEL_API_VALUE = {
     "NANO_BANANA_PRO": "NANO_BANANA_PRO",
     "NARWHAL":         "NARWHAL",
@@ -210,6 +230,71 @@ async def _get_recaptcha_token(page, action: str = "flow_generate") -> tuple[str
     return token, sitekey
 
 
+async def _set_dropdown(page, label_text: str, log_what: str) -> bool:
+    """Best-effort: click a Flow UI dropdown button matching `label_text`.
+
+    Flow renders aspect/count/model as pill-style toggle buttons whose
+    accessible name matches the visible label ("16:9", "1x", "Nano Banana
+    Pro", etc). We click the first one we find. If the dropdown was
+    already at that value the click is a no-op (Flow doesn't toggle off).
+
+    Returns True if a click landed, False if no match (we keep going —
+    Flow will use the project's last setting).
+    """
+    if not label_text:
+        return False
+    candidates = [
+        page.get_by_role("button", name=label_text, exact=True),
+        page.locator(f"button:has-text('{label_text}')"),
+        page.locator(f"[aria-label='{label_text}']"),
+    ]
+    for loc in candidates:
+        try:
+            await loc.first.click(timeout=1500)
+            logger.info("flow_dropdown_set %s=%s", log_what, label_text)
+            return True
+        except Exception:
+            continue
+    logger.warning("flow_dropdown_skip %s=%s (no match — using project default)",
+                   log_what, label_text)
+    return False
+
+
+async def _humanize(page, moves: int = 7) -> None:
+    """Emit human-like mouse movement + scroll + dwell so reCAPTCHA Enterprise
+    v3 sees genuine interaction signals before grecaptcha.execute().
+
+    Synthetic/no cursor movement (overly fast, perfectly straight, or absent)
+    is a known score-lowering signal; real curved movement at human pace with
+    pauses and a little scrolling raises the score. Best-effort, never raises.
+    """
+    import random as _r
+    try:
+        w, h = 1366, 768
+        try:
+            vp = page.viewport_size or {}
+            w, h = vp.get("width", w), vp.get("height", h)
+        except Exception:
+            pass
+        x, y = _r.randint(60, w - 60), _r.randint(90, h - 90)
+        for _ in range(moves):
+            nx = max(5, min(w - 5, x + _r.randint(-260, 260)))
+            ny = max(5, min(h - 5, y + _r.randint(-190, 190)))
+            # steps>1 makes Playwright interpolate → smooth, curved-ish path
+            await page.mouse.move(nx, ny, steps=_r.randint(10, 28))
+            x, y = nx, ny
+            await asyncio.sleep(_r.uniform(0.15, 0.55))
+            if _r.random() < 0.45:
+                try:
+                    await page.mouse.wheel(0, _r.randint(-280, 420))
+                except Exception:
+                    pass
+                await asyncio.sleep(_r.uniform(0.2, 0.5))
+        # final "reading" dwell — reCAPTCHA scores time-on-page positively
+        await asyncio.sleep(_r.uniform(1.8, 3.2))
+    except Exception as _exc:
+        logger.warning("flow_humanize_failed: %s", _exc)
+
 
 async def generate_image(
     project_id: str,
@@ -222,98 +307,353 @@ async def generate_image(
     headless: bool = True,
     timeout: int = 90,
 ) -> dict:
-    """Generate images via Flow API using page.evaluate() + fetch().
+    """Run the full Flow batchGenerateImages flow and return image refs.
 
-    Navigates to the Flow project page to establish browser context,
-    captures the OAuth bearer and reCAPTCHA token, then POSTs directly
-    to the Flow API from inside the browser via fetch() so Chromium
-    attaches its proprietary x-client-data headers automatically.
-    No DOM manipulation needed.
+    Args:
+        count: 1-4. Flow's UI supports 1x/2x/3x/4x. We best-effort drive
+            the dropdown; if Flow stored a different default on the project
+            you may get a different number back.
+
+    Returns:
+        {
+          "images": [{"url"|"data": ..., "mime": ..., "id": ...}, ...],
+          "raw":    <full API response>,
+          "elapsed_ms": int,
+          "model": str,
+        }
     """
     count = max(1, min(4, int(count or 1)))
     started = time.time()
     flow_url = f"https://labs.google/fx/vi/tools/flow/project/{project_id}"
     api_url = f"{API_HOST}/v1/projects/{project_id}/flowMedia:batchGenerateImages"
-    api_model = _MODEL_API_VALUE.get(model, model)
 
     async with pool.page(profile=profile, headless=headless) as page:
-        # Register bearer listener BEFORE navigating so we catch the
-        # initial API requests the Flow app makes on page load.
         await _prime_flow_session(page)
-
-        bearer_future = asyncio.ensure_future(_capture_bearer(page, timeout_s=25.0))
         await page.goto(flow_url, wait_until="domcontentloaded", timeout=30_000)
 
-        # Wait for app shell so grecaptcha runtime is available.
+        # Flow renders the prompt input as a contenteditable DIV (not a
+        # textarea — the only textarea on the page is the hidden
+        # g-recaptcha-response shadow input). Wait for a sizeable
+        # contenteditable to appear.
         try:
             await page.wait_for_function(
                 """() => {
                     const ces = Array.from(document.querySelectorAll('[contenteditable=\"true\"]'));
                     return ces.some(e => e.offsetWidth > 200 && e.offsetHeight > 0);
                 }""",
-                timeout=30_000,
+                timeout=60_000,
             )
-        except Exception:
-            logger.warning("flow page hydration timeout — continuing anyway")
-
-        bearer = await bearer_future
-        logger.info("flow_bearer_ok len=%d", len(bearer))
-
-        # 2) Get fresh reCAPTCHA Enterprise token.
-        recaptcha_token, sitekey = await _get_recaptcha_token(page, action="flow_generate")
-        logger.info("flow_recaptcha_ok sitekey=%s token_preview=%s", sitekey[:20], recaptcha_token[:30])
-
-        # 3) Bypass CSP so fetch() can reach aisandbox-pa.googleapis.com
-        # from the labs.google page. The page's CSP connect-src blocks
-        # cross-origin fetch, but Page.setBypassCSP via CDP disables it.
-        cdp = await page.context.new_cdp_session(page)
-        await cdp.send("Page.setBypassCSP", {"enabled": True})
-        logger.info("flow_csp_bypassed")
-
-        # 4) Call Flow API via fetch() inside the browser so Chromium
-        # attaches its proprietary x-client-data / Sec-* headers that
-        # Google's bot guard checks. Much simpler than DOM automation.
-        body = {
-            "prompt": prompt,
-            "imageModelName": api_model,
-            "aspectRatio": aspect_ratio,
-            "imageCount": count,
-        }
-        result = await page.evaluate(
-            """async (args) => {
-                const resp = await fetch(args.apiUrl, {
-                    method: 'POST',
-                    headers: {
-                        'Authorization': 'Bearer ' + args.bearer,
-                        'X-Recaptcha-Token': args.recaptchaToken,
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify(args.body),
-                });
-                const status = resp.status;
-                let data;
-                try { data = await resp.json(); }
-                catch (e) { data = await resp.text(); }
-                return {status, data};
-            }""",
-            {
-                "apiUrl": api_url,
-                "body": body,
-                "bearer": bearer,
-                "recaptchaToken": recaptcha_token,
-            },
-        )
-        logger.info("flow_api_done status=%d", status)
-
-        if status != 200:
-            error_body = result.get("data", "")
-            if isinstance(error_body, dict):
-                error_body = json.dumps(error_body)
+        except Exception as exc:
             raise RuntimeError(
-                f"Flow API {status}: {str(error_body)[:500]}"
+                f"Flow UI never hydrated (timeout). Profile may be logged out. "
+                f"Re-run /v1/session/manual-login with profile='{profile}'. ({exc})"
+            ) from exc
+
+        # ── Step 0: Remove the welcome dialog OVERLAY layer FIRST.
+        # On freshly-created projects, Flow renders a Radix dialog with:
+        #   • An overlay <div data-state="open"> (no role, viewport-sized)
+        #     that intercepts ALL mouse events.
+        #   • A dialog <div role="dialog"> with the actual content.
+        # Removing just the overlay (not the dialog) lets mouse events
+        # reach the workspace BELOW (where the prompt input lives at
+        # y≈658, well below the dialog box).
+        #
+        # Why remove overlay early (not just before submit click):
+        # Slate.js (the prompt editor) requires a REAL mouse click to
+        # activate before keyboard events register in its React state.
+        # JS .focus() + page.keyboard.type fires DOM key events, but
+        # Slate ignores them — the submit button stays aria-disabled=true
+        # because Slate state shows empty prompt. We confirmed this via
+        # probe: after JS focus + execCommand insertText, ce_text had
+        # our text in DOM but submit_aria_disabled was still 'true'.
+        await page.evaluate("""
+            () => {
+                document.querySelectorAll('[data-state="open"]').forEach(el => {
+                    if (el.getAttribute('role')) return;  // keep dialog content
+                    const r = el.getBoundingClientRect();
+                    if (r.width >= window.innerWidth * 0.8 && r.height >= window.innerHeight * 0.8) {
+                        el.remove();
+                    }
+                });
+            }
+        """)
+        await asyncio.sleep(0.3)
+
+        # ── Step 1: Real mouse click on the prompt input to activate
+        # Slate. Now that overlay is gone, the click reaches the editor.
+        focused = await page.evaluate("""
+            () => {
+                const ces = Array.from(document.querySelectorAll('[contenteditable=true]'));
+                // pick the largest visible contenteditable (the prompt input)
+                const target = ces
+                    .map(e => ({e, w: e.offsetWidth, h: e.offsetHeight}))
+                    .filter(x => x.w > 200 && x.h > 0)
+                    .sort((a, b) => (b.w * b.h) - (a.w * a.h))[0];
+                if (!target) {
+                    return {
+                        found: false,
+                        debug_ce_count: ces.length,
+                        debug_dims: ces.map(e => ({w: e.offsetWidth, h: e.offsetHeight, role: e.getAttribute('role')})),
+                    };
+                }
+                target.e.focus();
+                // Place caret at end (so subsequent keys append)
+                const sel = window.getSelection();
+                const range = document.createRange();
+                range.selectNodeContents(target.e);
+                range.collapse(false);
+                sel.removeAllRanges();
+                sel.addRange(range);
+                return {found: true, w: target.w, h: target.h};
+            }
+        """)
+        if not focused.get("found"):
+            raise RuntimeError(
+                f"Could not find/focus prompt contenteditable. "
+                f"ce_count={focused.get('debug_ce_count')} "
+                f"dims={focused.get('debug_dims')}"
+            )
+        logger.info("flow_prompt_focused w=%d h=%d", focused.get("w", 0), focused.get("h", 0))
+
+        # Real mouse click on the prompt — Slate needs this to activate
+        # its React event handlers. After this, keyboard.type populates
+        # Slate's state correctly and the submit button un-disables.
+        try:
+            prompt_locator = page.locator("[contenteditable='true']").first
+            await prompt_locator.click(timeout=5000)
+            logger.info("flow_prompt_mouse_clicked")
+        except Exception as exc:
+            logger.warning("flow_prompt mouse click failed: %s — keys may go to wrong target", str(exc)[:100])
+
+        # Inject the prompt via InputEvent('beforeinput'). Slate.js (the
+        # editor Flow uses) listens for beforeinput specifically —
+        # page.keyboard.type fires raw keydown/keypress/keyup which the
+        # browser CDP delivers, but Slate's React handlers don't pick
+        # those up. So the typed text appeared in the DOM but Slate's
+        # internal state stayed empty and the submit button stayed
+        # aria-disabled="true". Confirmed by v13 probe.
+        await page.evaluate(
+            """
+            (text) => {
+                const ce = document.querySelector('[contenteditable=true]');
+                if (!ce) return false;
+                ce.focus();
+                const e1 = new InputEvent('beforeinput', {
+                    inputType: 'insertText',
+                    data: text,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                ce.dispatchEvent(e1);
+                // If beforeinput wasn't preventDefault'd, fire input too.
+                const e2 = new InputEvent('input', {
+                    inputType: 'insertText',
+                    data: text,
+                    bubbles: true,
+                    cancelable: true,
+                });
+                ce.dispatchEvent(e2);
+                return true;
+            }
+            """,
+            prompt,
+        )
+        await asyncio.sleep(0.5)
+
+        # Verify Slate accepted the prompt (submit un-disables when the
+        # editor has non-empty content).
+        submit_state = await page.evaluate("""
+            () => {
+                const buttons = Array.from(document.querySelectorAll('button'));
+                const submit = buttons.find(b => /arrow_forward[\\s\\n]+(Tạo|Generate|Create|Send|Submit)/i.test(b.innerText||''));
+                return submit ? submit.getAttribute('aria-disabled') : 'no-submit';
+            }
+        """)
+        logger.info("flow_prompt_injected submit_aria_disabled=%s", submit_state)
+        if submit_state == "true":
+            raise RuntimeError(
+                "Slate did not accept the prompt — submit button stayed "
+                "aria-disabled=true after InputEvent dispatch"
             )
 
-        payload = result.get("data", {})
+        # 2) Set model / aspect / count via Flow's UI pill buttons BEFORE
+        # clicking submit. This replaces the old request-interception path
+        # because page.route() hangs in CloakBrowser (CDP Fetch.enable
+        # never returns). DOM-driven settings are less robust against Flow
+        # UI reskins, but they avoid the CDP hang entirely.
+        api_pattern = "flowMedia:batchGenerateImages"
+
+        _ASPECT_LABEL = {
+            "IMAGE_ASPECT_RATIO_LANDSCAPE": "16:9",
+            "IMAGE_ASPECT_RATIO_LANDSCAPE_4_3": "4:3",
+            "IMAGE_ASPECT_RATIO_SQUARE": "1:1",
+            "IMAGE_ASPECT_RATIO_PORTRAIT_3_4": "3:4",
+            "IMAGE_ASPECT_RATIO_PORTRAIT": "9:16",
+        }
+        _MODEL_LABEL = {
+            "NANO_BANANA_PRO": "Nano Banana Pro",
+            "NANO_BANANA_2": "Nano Banana 2",
+            "IMAGEN_4": "Imagen 4",
+        }
+        # Best-effort: if dropdown click misses, Flow uses project default.
+        aspect_label = _ASPECT_LABEL.get(aspect_ratio, aspect_ratio)
+        model_label = _MODEL_LABEL.get(model, model)
+        await _set_dropdown(page, aspect_label, "aspect")
+        await _set_dropdown(page, model_label, "model")
+        if count > 1:
+            await _set_dropdown(page, str(count) + "x", "count")
+        logger.info("flow_dropdowns_done aspect=%s model=%s count=%d", aspect_label, model_label, count)
+
+        # 2.5) reCAPTCHA token helper — re-fetched FRESH on every submit attempt.
+        # Enterprise score is borderline on a GPU-less server, and each token
+        # rolls a new score, so the retry loop below calls this each try.
+        async def _refresh_recaptcha() -> None:
+            try:
+                tok, sitekey = await _get_recaptcha_token(page, action="flow_generate")
+                await page.evaluate(
+                    """(token) => {
+                        const ta = document.querySelector('textarea[name="g-recaptcha-response"]');
+                        if (ta) { ta.value = token; return true; }
+                        const ta2 = document.querySelector('textarea[id*="recaptcha" i]');
+                        if (ta2) { ta2.value = token; return true; }
+                        const ta3 = document.querySelector('#g-recaptcha-response');
+                        if (ta3) { ta3.value = token; return true; }
+                        return false;
+                    }""",
+                    tok,
+                )
+                logger.info("flow_recaptcha_ok token_preview=%s", tok[:25])
+            except Exception as _exc:
+                logger.warning("flow_recaptcha_failed: %s", _exc)
+
+        # 3) Click the "Tạo" submit button. On fresh projects the welcome
+        # dialog overlay intercepts mouse clicks, so JS .click() is more
+        # reliable — it dispatches the synthetic event directly to the
+        # element and bypasses the overlay entirely.
+        async def _click_generate() -> None:
+            logger.info("flow_click_generate_enter")
+            # Overlay was already removed at the start, but re-do it in
+            # case React re-rendered the welcome dialog overlay.
+            try:
+                await page.evaluate("""
+                    () => {
+                        document.querySelectorAll('[data-state="open"]').forEach(el => {
+                            if (el.getAttribute('role')) return;
+                            const r = el.getBoundingClientRect();
+                            if (r.width >= window.innerWidth * 0.8 && r.height >= window.innerHeight * 0.8) {
+                                el.remove();
+                            }
+                        });
+                    }
+                """)
+            except Exception as _exc:
+                logger.warning("flow_click_overlay_remove_failed: %s", _exc)
+            await asyncio.sleep(0.2)
+            logger.info("flow_click_overlay_done")
+
+            # Step 2: Find the submit button — text "arrow_forward\\nTạo"
+            # (Material icon name + label as two lines).
+            submit_btn = page.locator(
+                "button:has-text('arrow_forward'):has-text('Tạo'), "
+                "button:has-text('arrow_forward'):has-text('Generate'), "
+                "button:has-text('arrow_forward'):has-text('Create')"
+            ).last
+            logger.info("flow_click_submit_btn_count=%d", await submit_btn.count())
+            try:
+                await submit_btn.click(timeout=8000)
+                logger.info("flow_submit_clicked via_locator")
+                return
+            except Exception as exc:
+                logger.warning("flow_submit locator click failed: %s — trying JS dispatch", str(exc)[:120])
+
+            # Step 3: Fallback — full PointerEvent + MouseEvent sequence via
+            # JS. React's onClick handler needs pointerdown→pointerup→click
+            # to fire reliably; a bare .click() sometimes doesn't trigger
+            # the synthetic event.
+            dispatched = await page.evaluate("""
+                () => {
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    let btn = buttons.find(b => /arrow_forward[\\s\\n]+(Tạo|Generate|Create|Send|Submit)/i.test(b.innerText || ''));
+                    if (!btn) btn = buttons.find(b => /arrow_(forward|upward)/i.test(b.innerText || ''));
+                    if (!btn) {
+                        const taoes = buttons.filter(b => /Tạo/.test(b.innerText||'') && !/add_2/.test(b.innerText||''));
+                        btn = taoes[taoes.length - 1];
+                    }
+                    if (!btn) return {clicked: false};
+                    const r = btn.getBoundingClientRect();
+                    const x = r.left + r.width/2, y = r.top + r.height/2;
+                    const opts = {bubbles: true, cancelable: true, clientX: x, clientY: y, button: 0, view: window};
+                    btn.dispatchEvent(new PointerEvent('pointerdown', opts));
+                    btn.dispatchEvent(new MouseEvent('mousedown', opts));
+                    btn.dispatchEvent(new PointerEvent('pointerup', opts));
+                    btn.dispatchEvent(new MouseEvent('mouseup', opts));
+                    btn.dispatchEvent(new MouseEvent('click', opts));
+                    btn.click();
+                    return {clicked: true, text: (btn.innerText || '').slice(0, 50).replace(/\\n/g, '|')};
+                }
+            """)
+            if dispatched.get("clicked"):
+                logger.info("flow_submit_clicked via_dispatch text=%s", dispatched.get("text"))
+                return
+            logger.warning("flow_submit: no button found, trying Ctrl+Enter")
+            await page.keyboard.press("Control+Enter")
+
+        # 4) Submit with reCAPTCHA retry. Each submit rolls a fresh Enterprise
+        # score; on a GPU-less server the score is borderline so a single try
+        # often gets 403 "reCAPTCHA evaluation failed". Human-like interaction
+        # before each token (mouse/scroll/dwell) raises the score; retry with a
+        # fresh token (re-click submit) until one passes or attempts run out.
+        _MAX_RECAPTCHA_RETRIES = 8
+        per_try_timeout = max(25, (timeout - 10) // 3)
+        response = None
+        last_err = ""
+        logger.info("flow_waiting_for_post per_try_s=%d max_retries=%d", per_try_timeout, _MAX_RECAPTCHA_RETRIES)
+        # Warm genuine interaction history once before the first token — this is
+        # the biggest controllable score signal on an automated browser.
+        await _humanize(page, moves=9)
+        for _attempt in range(1, _MAX_RECAPTCHA_RETRIES + 1):
+            if _attempt > 1:
+                await _humanize(page, moves=3)
+            await _refresh_recaptcha()
+            try:
+                async with page.expect_response(
+                    lambda r: api_pattern in r.url and r.request.method == "POST",
+                    timeout=per_try_timeout * 1000,
+                ) as resp_info:
+                    logger.info("flow_submit attempt=%d/%d", _attempt, _MAX_RECAPTCHA_RETRIES)
+                    await _click_generate()
+                response = await resp_info.value
+                logger.info("flow_got_response attempt=%d status=%d", _attempt, response.status)
+            except Exception as exc:
+                last_err = f"no flowMedia POST observed: {exc}"
+                logger.warning("flow_expect_response attempt=%d failed: %s", _attempt, str(exc)[:120])
+                response = None
+                await asyncio.sleep(2.0)
+                continue
+
+            if response.status == 200:
+                break
+
+            body_text = await response.text()
+            last_err = f"Flow API {response.status}: {body_text[:300]}"
+            low = body_text.lower()
+            is_recaptcha = response.status in (401, 403, 429) and (
+                "recaptcha" in low or "unusual" in low or "permission" in low
+            )
+            if is_recaptcha and _attempt < _MAX_RECAPTCHA_RETRIES:
+                logger.warning("flow_recaptcha_reject attempt=%d/%d — retry fresh token", _attempt, _MAX_RECAPTCHA_RETRIES)
+                response = None
+                await asyncio.sleep(2.0)
+                continue
+            # Non-reCAPTCHA error → fatal, don't waste retries.
+            raise RuntimeError(last_err)
+
+        if response is None or response.status != 200:
+            raise RuntimeError(
+                f"Flow generate failed after {_MAX_RECAPTCHA_RETRIES} reCAPTCHA attempts: {last_err}"
+            )
+
+        payload = await response.json()
         images = _extract_image_refs(payload)
         return {
             "images": images,
