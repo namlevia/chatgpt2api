@@ -598,29 +598,41 @@ async def generate_image(
             logger.warning("flow_submit: no button found, trying Ctrl+Enter")
             await page.keyboard.press("Control+Enter")
 
-        # 4) Submit with reCAPTCHA retry. Each submit rolls a fresh Enterprise
-        # score; on a GPU-less server the score is borderline so a single try
-        # often gets 403 "reCAPTCHA evaluation failed". Human-like interaction
-        # before each token (mouse/scroll/dwell) raises the score; retry with a
-        # fresh token (re-click submit) until one passes or attempts run out.
-        _MAX_RECAPTCHA_RETRIES = 8
-        per_try_timeout = max(25, (timeout - 10) // 3)
+        # 4) Submit with reCAPTCHA retry, bounded by a WALL-CLOCK budget so the
+        # call always returns before the caller's HTTP timeout (no hangs). The
+        # score is borderline on a GPU-less server, so: humanize ONCE up front
+        # (the interaction history persists for the page session and benefits
+        # every subsequent execute()), then retry cheaply with a fresh token
+        # until one passes or the budget runs out. We stop launching new
+        # attempts once too little time remains for a winning attempt (~45s to
+        # generate) so a success is never cut off mid-flight.
+        _budget = max(60, timeout - 15)   # seconds for the whole retry phase
+        _deadline = started + _budget
+        _GEN_RESERVE = 50                 # a successful POST needs ~45s to return
+        _per_try = 55
         response = None
         last_err = ""
-        logger.info("flow_waiting_for_post per_try_s=%d max_retries=%d", per_try_timeout, _MAX_RECAPTCHA_RETRIES)
-        # Warm genuine interaction history once before the first token — this is
-        # the biggest controllable score signal on an automated browser.
-        await _humanize(page, moves=9)
-        for _attempt in range(1, _MAX_RECAPTCHA_RETRIES + 1):
+        _attempt = 0
+        logger.info("flow_waiting_for_post budget_s=%d", _budget)
+        # Heavy humanize once — the biggest controllable score signal.
+        await _humanize(page, moves=8)
+        while time.time() < _deadline:
+            remaining = _deadline - time.time()
+            if remaining < _GEN_RESERVE:
+                logger.info("flow_budget_low remaining=%.0fs — stop (no room for a win)", remaining)
+                break
+            _attempt += 1
             if _attempt > 1:
-                await _humanize(page, moves=3)
+                # Cheap fresh interaction (history already built) so more
+                # attempts fit in the budget.
+                await _humanize(page, moves=2)
             await _refresh_recaptcha()
             try:
                 async with page.expect_response(
                     lambda r: api_pattern in r.url and r.request.method == "POST",
-                    timeout=per_try_timeout * 1000,
+                    timeout=int(min(_per_try, _deadline - time.time())) * 1000,
                 ) as resp_info:
-                    logger.info("flow_submit attempt=%d/%d", _attempt, _MAX_RECAPTCHA_RETRIES)
+                    logger.info("flow_submit attempt=%d budget_left=%.0fs", _attempt, _deadline - time.time())
                     await _click_generate()
                 response = await resp_info.value
                 logger.info("flow_got_response attempt=%d status=%d", _attempt, response.status)
@@ -628,7 +640,7 @@ async def generate_image(
                 last_err = f"no flowMedia POST observed: {exc}"
                 logger.warning("flow_expect_response attempt=%d failed: %s", _attempt, str(exc)[:120])
                 response = None
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.0)
                 continue
 
             if response.status == 200:
@@ -640,17 +652,17 @@ async def generate_image(
             is_recaptcha = response.status in (401, 403, 429) and (
                 "recaptcha" in low or "unusual" in low or "permission" in low
             )
-            if is_recaptcha and _attempt < _MAX_RECAPTCHA_RETRIES:
-                logger.warning("flow_recaptcha_reject attempt=%d/%d — retry fresh token", _attempt, _MAX_RECAPTCHA_RETRIES)
+            if is_recaptcha:
+                logger.warning("flow_recaptcha_reject attempt=%d — retry fresh token", _attempt)
                 response = None
-                await asyncio.sleep(2.0)
+                await asyncio.sleep(1.2)
                 continue
-            # Non-reCAPTCHA error → fatal, don't waste retries.
+            # Non-reCAPTCHA error → fatal, don't waste budget.
             raise RuntimeError(last_err)
 
         if response is None or response.status != 200:
             raise RuntimeError(
-                f"Flow generate failed after {_MAX_RECAPTCHA_RETRIES} reCAPTCHA attempts: {last_err}"
+                f"Flow generate failed after {_attempt} attempts within {_budget}s budget: {last_err}"
             )
 
         payload = await response.json()
