@@ -118,9 +118,12 @@ export function ChatGPTOnboardCard() {
   }
 
   function profileSuggestion() {
-    // chatgpt-<localpart-of-email>
+    // Account-centric profile name (provider-neutral) so the SAME Google
+    // account reuses ONE browser profile across ChatGPT / Gemini Web / Flow.
+    // (Was "chatgpt-<local>" which made cross-provider reuse carry a
+    // provider-specific name.)
     const local = (draft.email.split("@")[0] || "default").replace(/[^a-z0-9-]/gi, "-");
-    return `chatgpt-${local}`;
+    return `google-${local}`;
   }
 
   async function pollOnboardStatus(profile: string, onSuccess: (s: OnboardState) => void) {

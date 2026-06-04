@@ -60,6 +60,17 @@ export function GeminiWebCard() {
     };
   }, []);
 
+  // Account-centric profile suggestion: when an email is entered and the
+  // profile is still the untouched default, suggest google-<localpart> so the
+  // SAME Google account reuses ONE browser profile across ChatGPT / Gemini
+  // Web / Flow (provider-neutral naming). Won't override a custom value.
+  useEffect(() => {
+    const local = (draft.email.split("@")[0] || "").replace(/[^a-z0-9-]/gi, "-");
+    if (local && (profile === "" || profile === "gemini-web-default")) {
+      setProfile(`google-${local}`);
+    }
+  }, [draft.email, profile]);
+
   async function fetchCfg() {
     try {
       const data = await request.get("/api/settings");
