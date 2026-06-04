@@ -6,12 +6,27 @@ import { Button } from "@/components/ui/button";
 
 type CSCfg = { url: string; apiKey: string };
 
-// Browser profiles that are NOT Google-account sessions (system / tool
+// Browser profiles that are NOT real Google-account sessions (system / tool
 // profiles) — hidden from the reuse picker so users only see real accounts.
 const SYSTEM_PROFILES = new Set([
   "default", "nopecha", "phatnguoi", "phatnguoi-manual",
   "stealth-check", "cfdemo",
 ]);
+
+// Keep only profiles that look like a real onboarded Google account, dropping
+// junk/test/probe dirs and invalid names (e.g. "chatgpt-*", names with a comma
+// from a stray account-type label, probes, test-onboard-*, *-default).
+function isAccountProfile(n: string): boolean {
+  if (!n) return false;
+  if (/[,*\s]/.test(n)) return false; // junk: comma / asterisk / whitespace
+  if (SYSTEM_PROFILES.has(n)) return false;
+  if (/(^|[-_])default$/i.test(n)) return false; // default, gemini-web-default
+  if (/^diag\d*$/i.test(n)) return false;
+  if (/^pn-/i.test(n)) return false;
+  if (/(^|-)probe\d*$/i.test(n)) return false; // chatgpt-probe, -probe2
+  if (/^test[-_]|[-_]test$|^nonexistent/i.test(n)) return false; // test-*, *-test
+  return true;
+}
 
 /**
  * Shared "reuse an already-onboarded profile" control.
@@ -45,10 +60,8 @@ export function ReuseProfilePicker({
       const data = await res.json();
       const names: string[] = (data.profiles || [])
         .map((p: { name?: string }) => p.name || "")
-        .filter(
-          (n: string) =>
-            n && !SYSTEM_PROFILES.has(n) && !/^diag\d*$/.test(n) && !/^pn-/.test(n),
-        );
+        .filter(isAccountProfile)
+        .sort();
       setProfiles(names);
       setSelected((s) => (s && names.includes(s) ? s : names[0] || ""));
     } catch {
