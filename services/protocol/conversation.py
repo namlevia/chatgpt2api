@@ -918,6 +918,8 @@ def iter_conversation_payloads(payloads: Iterator[str], history_text: str = "",
         if not isinstance(event, dict):
             yield conversation_base_event("conversation.event", state, raw=event)
             continue
+        if event.get("error"):
+            raise RuntimeError(str(event.get("error")))
         update_conversation_state(state, payload, event)
         if history_index < len(history_messages) and event_assistant_text(event, history_text) == history_messages[history_index]:
             history_index += 1
@@ -1002,11 +1004,17 @@ def stream_conversation_events(backend: OpenAIBackendAPI, request: ConversationR
             return
         except Exception as exc:
             error_message = str(exc)
-            if token and not emitted and is_token_invalid_error(error_message):
-                account_service.remove_invalid_token(token, "text_stream")
-                token = account_service.get_text_access_token(attempted_tokens)
-                if token:
-                    continue
+            if token and not emitted:
+                if is_token_invalid_error(error_message):
+                    account_service.remove_invalid_token(token, "text_stream")
+                    token = account_service.get_text_access_token(attempted_tokens)
+                    if token:
+                        continue
+                elif "hit your limit" in error_message.lower() or "too many requests" in error_message.lower():
+                    account_service.demote_account(token)
+                    token = account_service.get_text_access_token(attempted_tokens)
+                    if token:
+                        continue
             raise
 
 

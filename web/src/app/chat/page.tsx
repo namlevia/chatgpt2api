@@ -102,6 +102,17 @@ export default function ChatPage() {
         }),
       });
 
+      if (!resp.ok) {
+        let errText = resp.statusText;
+        try {
+          const errData = await resp.json();
+          errText = errData?.error?.message || errText;
+        } catch (e) {}
+        setMessages(prev => [...prev, { role: "assistant", content: `[Lỗi API: ${errText}]`, isError: true }]);
+        setStreaming(false);
+        return;
+      }
+
       const reader = resp.body?.getReader();
       if (!reader) { setStreaming(false); return; }
 
@@ -110,13 +121,17 @@ export default function ChatPage() {
       setMessages(prev => [...prev, { role: "assistant", content: "" }]);
 
       const decoder = new TextDecoder();
+      let buffer = "";
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        const text = decoder.decode(value);
-        const lines = text.split("\n").filter(l => l.startsWith("data: "));
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || ""; // Keep the last incomplete line in buffer
+        
         for (const line of lines) {
-          const data = line.slice(6);
+          if (!line.startsWith("data: ")) continue;
+          const data = line.slice(6).trim();
           if (data === "[DONE]") continue;
           try {
             const json = JSON.parse(data);

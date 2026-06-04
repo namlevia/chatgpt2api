@@ -725,26 +725,66 @@ def inject_search_results(
     messages: list[dict[str, Any]],
     results: list[dict[str, str]],
     inject_as: str = "user_message",
+    max_inject_chars: int = 12000,  # Hard cap for ChatGPT free (413 guard)
 ) -> list[dict[str, Any]]:
-    """Inject search results into the message list.
-
-    Args:
-        messages: Current message list
-        results: Search results [{title, snippet, url}, ...]
-        inject_as: How to inject — 'user_message' or 'system_message'
-
-    Returns:
-        Modified message list with search results injected
-    """
+    """Inject search results into the message list."""
     if not results:
         return messages
 
-    # Format search results
-    lines = ["Dưới đây là kết quả tìm kiếm Google MỚI NHẤT. Hãy trả lời DỰA TRÊN các thông tin này, trích dẫn số liệu cụ thể:"]
+    import re as _re
+
+    # Phrases that indicate KB meta-content / ingestion garbage rather than real knowledge
+    _GARBAGE_PATTERNS = [
+        "khung nội dung phù hợp",
+        "kb_tu_nhien cập nhật mới nhất",
+        "dữ liệu tìm kiếm được cung cấp",
+        "kết quả không liên quan",
+        "loại bỏ các dữ liệu không liên quan",
+        "bài viết này tập trung vào việc tổng hợp",
+        "Đánh giá dữ liệu tìm kiếm",
+        "auto_ai/20",  # Auto-generated AI noise entries
+    ]
+
+    def _is_garbage_snippet(snippet: str) -> bool:
+        """Return True if snippet is KB meta-content / ingestion garbage."""
+        s = snippet.lower()
+        for pat in _GARBAGE_PATTERNS:
+            if pat.lower() in s:
+                return True
+        return False
+
+    def _clean_snippet(snippet: str) -> str:
+        """Remove raw MCP artifacts like entity[\"city\",\"...\"] from snippets."""
+        # Remove entity[...] prefix patterns from MCP weather/other tools
+        snippet = _re.sub(r'entity\[.*?\]', '', snippet)
+        # Remove leftover \"  from JSON-escaped strings
+        snippet = snippet.replace('\\"', '')
+        return snippet.strip()
+
+    # Format search results with strong instruction so HA's smart-home-focused
+    # system prompt doesn't cause the AI to ignore search data and greet instead.
+    lines = [
+        "[SEARCH_RESULTS - BẮT BUỘC ĐỌC VÀ TRẢ LỜI DỰA TRÊN ĐÂY]",
+        "Dưới đây là dữ liệu tìm kiếm/kiến thức cho câu hỏi này.",
+        "KHÔNG chào hỏi, KHÔNG nói 'Xin chào'. Trả lời TRỰC TIẾP bằng các thông tin sau:",
+    ]
+    total_chars = sum(len(l) for l in lines)
+    valid_count = 0
     for i, r in enumerate(results, 1):
         title = r.get("title", "")
-        snippet = r.get("snippet", "")
-        lines.append(f"{i}. {title}: {snippet}")
+        snippet = _clean_snippet(r.get("snippet", ""))
+        if _is_garbage_snippet(snippet):
+            continue  # Skip KB garbage entries
+        line = f"{valid_count + 1}. {title}: {snippet}"
+        if total_chars + len(line) > max_inject_chars:
+            break
+        lines.append(line)
+        total_chars += len(line)
+        valid_count += 1
+
+    # If all results were garbage, skip injection (better no context than wrong context)
+    if valid_count == 0:
+        return messages
 
     search_text = "\n".join(lines)
 
@@ -769,7 +809,6 @@ def inject_search_results(
                 elif isinstance(content, list):
                     # HA format: [{"type":"text","text":"..."}]
                     result[i] = dict(result[i])
-                    # Prepend search as a separate text part
                     search_part = {"type": "text", "text": search_text}
                     result[i]["content"] = [search_part] + [dict(c) for c in content]
                 break

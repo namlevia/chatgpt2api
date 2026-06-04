@@ -361,9 +361,11 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     # Execute MCP tools server-side — HA doesn't know these tools
     if not isinstance(result, dict):
         # Streaming (Iterator) — wrap to intercept tool calls
-        result = _wrap_mcp_stream(result, messages, route, body)
+        if route.provider != "chatgpt_free":
+            result = _wrap_mcp_stream(result, messages, route, body)
     elif isinstance(result, dict):
-        result = _execute_mcp_tools_in_response(messages, result, route, body)
+        if route.provider != "chatgpt_free":
+            result = _execute_mcp_tools_in_response(messages, result, route, body)
         import json
         logger.info({"event": "debug_final_result", "result": json.dumps(result, ensure_ascii=False)[:2000]})
 
@@ -1113,6 +1115,17 @@ def _prefetch_ha_context_if_needed(
     messages = cleaned_messages
 
     from services.ha_client import is_ha_query
+
+    # Skip HA prefetch if search results are already injected.
+    # search_service injects results containing weather/nature keywords (e.g.
+    # "nhiệt độ", "mây") that can falsely trigger is_ha_query, which then
+    # injects HA device context over the search content — causing "Xin chào" AI.
+    _SEARCH_RESULT_MARKER = "kết quả tìm kiếm"
+    for m in messages:
+        if m.get("role") == "user" and _SEARCH_RESULT_MARKER in str(m.get("content", "")).lower():
+            logger.info({"event": "ha_prefetch_skip", "reason": "search_results_already_injected"})
+            return messages
+
     if not is_ha_query(messages):
         return messages
 
@@ -1137,6 +1150,7 @@ def _prefetch_ha_context_if_needed(
             return messages
         if m.get("role") == "user" and "DỮ LIỆU THỜI GIAN THỰC TỪ HOME ASSISTANT" in str(m.get("content", "")):
             return messages
+
 
     # ── Targeted lookup (Codex-style: search → get_state) ──────────────────
     # Extract room/device keywords from query. Use the same keyword list
@@ -1392,13 +1406,25 @@ _OAICITE = re.compile(r"[\[【]?\s*oaicite[^\]】\)]*[\]】\)]?")
 # Tool-call args leaking as text: `entity["city","Hà Nội",...]` — match the
 # `entity[ "string", "string", ... ]` shape with at least one quoted arg so we
 # don't accidentally strip valid `entity[0]` / `entity[i]` code in answers.
-_ENTITY_LEAK = re.compile(r'\bentity\[\s*"[^"]*"(?:\s*,\s*"[^"]*")*\s*\]')
+# Also handles ChatGPT's private-use Unicode wrappers \ue200...\ue202...\ue201 that
+# the web model inserts around entity references in its streamed output.
+_ENTITY_LEAK = re.compile(
+    r'\ue200?'               # optional Unicode start sentinel
+    r'\bentity'
+    r'\ue202?'               # optional Unicode bracket-open sentinel
+    r'\[\s*"[^"]*"(?:\s*,\s*"[^"]*")*\s*\]'  # ["arg","arg",...] body
+    r'\ue201?'               # optional Unicode end sentinel
+)
 # Internal trace appended by openai_backend_api._api_messages_to_conversation_messages
 # when an assistant turn carried tool_calls. The ChatGPT web model sometimes
 # echoes this line verbatim at the start of its next answer (observed on
 # "trạng thái nhà" → "[System Log: You executed tool GetLiveContext with args {}]").
 # It is internal bookkeeping and must never reach the user.
 _SYSLOG_LEAK = re.compile(r"\n*\[System Log:[^\]]*\]\n*")
+# ChatGPT web model leaks image-gen directives: image_group{"aspect_ratio":...}
+_IMAGE_GROUP_LEAK = re.compile(r'\bimage_group\s*\{[^}]*\}', re.DOTALL)
+# After entity[] removal, orphan "- :" bullet lines remain
+_ORPHAN_BULLET = re.compile(r'^-\s*:\s*$', re.MULTILINE)
 
 
 def _strip_artifacts_inline(text: str) -> str:
@@ -1407,7 +1433,9 @@ def _strip_artifacts_inline(text: str) -> str:
     out = _CITE_TURN.sub("", text)
     out = _OAICITE.sub("", out)
     out = _ENTITY_LEAK.sub("", out)
+    out = _IMAGE_GROUP_LEAK.sub("", out)
     out = _SYSLOG_LEAK.sub("", out)
+    out = _ORPHAN_BULLET.sub("", out)
     return out
 
 
@@ -1492,14 +1520,6 @@ def _strip_markdown_in_stream(it: Iterator[dict[str, Any]]) -> Iterator[dict[str
                 }
                 yield content_chunk
                 emitted_final = True
-        except Exception:
-            pass
-        # Skip empty content chunks (we'll send the merged one)
-        try:
-            ch0 = (chunk.get("choices") or [{}])[0]
-            delta0 = ch0.get("delta") if isinstance(ch0, dict) else None
-            if isinstance(delta0, dict) and delta0.get("content") == "" and not ch0.get("finish_reason") and not delta0.get("tool_calls") and not delta0.get("role"):
-                continue
         except Exception:
             pass
         yield chunk
