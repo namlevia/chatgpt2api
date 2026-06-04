@@ -328,6 +328,37 @@ async def generate_image(
     api_url = f"{API_HOST}/v1/projects/{project_id}/flowMedia:batchGenerateImages"
 
     async with pool.page(profile=profile, headless=headless) as page:
+        # TRICK 1: Tẩy sạch cookie & storage đánh dấu Bot của reCAPTCHA (Surgical remove để giữ login)
+        try:
+            await page.goto("https://labs.google/fx", wait_until="domcontentloaded", timeout=15000)
+            await page.evaluate("""() => {
+                const keys = [];
+                for (let i = 0; i < window.localStorage.length; i++) {
+                    const k = window.localStorage.key(i);
+                    if (k && (k.includes('recaptcha') || k.includes('grecaptcha') || k.startsWith('rc::'))) keys.push(k);
+                }
+                keys.forEach(k => window.localStorage.removeItem(k));
+                
+                const sk = [];
+                for (let i = 0; i < window.sessionStorage.length; i++) {
+                    const k = window.sessionStorage.key(i);
+                    if (k && (k.includes('recaptcha') || k.includes('grecaptcha') || k.startsWith('rc::'))) sk.push(k);
+                }
+                sk.forEach(k => window.sessionStorage.removeItem(k));
+                
+                document.cookie.split(';').forEach(c => {
+                    if(c.includes('grecaptcha') || c.includes('_ga') || c.includes('recaptcha')) {
+                        let name = c.split('=')[0].trim();
+                        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/';
+                        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.google.com';
+                        document.cookie = name + '=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/;domain=.labs.google';
+                    }
+                });
+            }""")
+            logger.info("flow_stealth: surgically cleared reCAPTCHA cache")
+        except Exception as exc:
+            logger.debug("flow_stealth_clear_failed: %s", exc)
+
         await _prime_flow_session(page)
         await page.goto(flow_url, wait_until="domcontentloaded", timeout=30_000)
 
@@ -495,13 +526,32 @@ async def generate_image(
             "NANO_BANANA_2": "Nano Banana 2",
             "IMAGEN_4": "Imagen 4",
         }
-        # Best-effort: if dropdown click misses, Flow uses project default.
         aspect_label = _ASPECT_LABEL.get(aspect_ratio, aspect_ratio)
         model_label = _MODEL_LABEL.get(model, model)
+        
+        # Open the settings menu if it's closed
+        try:
+            menu_btn = page.locator("button[aria-haspopup='menu']").first
+            if await menu_btn.count() > 0 and await menu_btn.get_attribute("aria-expanded") == "false":
+                await menu_btn.click(timeout=1500)
+                await page.wait_for_timeout(500)
+        except Exception as e:
+            logger.debug("flow_menu_open skipped: %s", e)
+
         await _set_dropdown(page, aspect_label, "aspect")
         await _set_dropdown(page, model_label, "model")
-        if count > 1:
-            await _set_dropdown(page, str(count) + "x", "count")
+        
+        # New Google Flow UI count labels: 1x, x2, x3, x4
+        count_label = "1x" if count == 1 else f"x{count}"
+        await _set_dropdown(page, count_label, "count")
+        
+        # Close the settings menu to avoid intercepting other clicks
+        try:
+            if await menu_btn.count() > 0 and await menu_btn.get_attribute("aria-expanded") == "true":
+                await menu_btn.click(timeout=1500)
+        except Exception:
+            pass
+
         logger.info("flow_dropdowns_done aspect=%s model=%s count=%d", aspect_label, model_label, count)
 
         # 2.5) reCAPTCHA token helper — re-fetched FRESH on every submit attempt.

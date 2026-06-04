@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import * as DialogPrimitive from "@radix-ui/react-dialog";
+import { createPortal } from "react-dom";
 import { ChevronLeft, ChevronRight, Download, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -164,6 +164,10 @@ export function ImageLightbox({
   useEffect(() => {
     if (!open) return;
 
+    // Lock body scroll
+    const originalOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -171,12 +175,18 @@ export function ImageLightbox({
       } else if (e.key === "ArrowRight") {
         e.preventDefault();
         goNext();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        onOpenChange(false);
       }
     };
 
     window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [open, goPrev, goNext]);
+    return () => {
+      document.body.style.overflow = originalOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [open, goPrev, goNext, onOpenChange]);
 
   const handleDownload = useCallback(() => {
     if (!current) return;
@@ -335,96 +345,107 @@ export function ImageLightbox({
     gestureRef.current = null;
   }, [cancelScheduledTransform]);
 
-  if (!current) return null;
+  const [mounted, setMounted] = useState(false);
+  useEffect(() => setMounted(true), []);
 
-  return (
-    <DialogPrimitive.Root open={open} onOpenChange={onOpenChange}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0" />
-        <DialogPrimitive.Content
-          className="fixed inset-0 z-50 flex items-center justify-center outline-none"
-          onPointerDownOutside={(e) => e.preventDefault()}
+  if (!current || !open || !mounted) return null;
+
+  return createPortal(
+    <div 
+      className="flex items-center justify-center outline-none bg-black/90 backdrop-blur-md"
+      style={{
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        width: '100vw',
+        height: '100vh',
+        zIndex: 99999,
+        margin: 0,
+        padding: 0
+      }}
+    >
+      <div className="absolute top-4 right-4 z-[999999] flex items-center gap-2">
+        {current.sizeLabel || current.dimensions ? (
+          <span className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-white/90">
+            {[current.sizeLabel, current.dimensions].filter(Boolean).join(" · ")}
+          </span>
+        ) : null}
+        {images.length > 1 && (
+          <span className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-white/90">
+            {currentIndex + 1} / {images.length}
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={handleDownload}
+          className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70"
+          aria-label="Tải ảnh"
         >
-          <DialogPrimitive.Title className="sr-only">
-            Xem trước ảnh
-          </DialogPrimitive.Title>
+          <Download className="size-4" />
+        </button>
+        <button
+          type="button"
+          onClick={() => onOpenChange(false)}
+          className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70"
+        >
+          <X className="size-4" />
+          <span className="sr-only">Đóng</span>
+        </button>
+      </div>
 
-          <div className="absolute top-[calc(env(safe-area-inset-top)+1rem)] right-4 z-10 flex items-center gap-2">
-            {current.sizeLabel || current.dimensions ? (
-              <span className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-white/90">
-                {[current.sizeLabel, current.dimensions].filter(Boolean).join(" · ")}
-              </span>
-            ) : null}
-            {images.length > 1 && (
-              <span className="rounded-full bg-black/50 px-3 py-1.5 text-xs font-medium text-white/90">
-                {currentIndex + 1} / {images.length}
-              </span>
-            )}
-            <button
-              type="button"
-              onClick={handleDownload}
-              className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70"
-              aria-label="Tải ảnh"
-            >
-              <Download className="size-4" />
-            </button>
-            <DialogPrimitive.Close className="inline-flex size-9 items-center justify-center rounded-full bg-black/50 text-white/90 transition hover:bg-black/70">
-              <X className="size-4" />
-              <span className="sr-only">Đóng</span>
-            </DialogPrimitive.Close>
-          </div>
+      {hasPrev && transform.scale <= minScale && (
+        <button
+          type="button"
+          onClick={goPrev}
+          className="absolute left-4 z-[110] inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
+          aria-label="Ảnh trước"
+        >
+          <ChevronLeft className="size-5" />
+        </button>
+      )}
 
-          {hasPrev && transform.scale <= minScale && (
-            <button
-              type="button"
-              onClick={goPrev}
-              className="absolute left-4 z-10 inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
-              aria-label="Ảnh trước"
-            >
-              <ChevronLeft className="size-5" />
-            </button>
+      <div
+        className="flex h-full w-full touch-none items-center justify-center overflow-hidden"
+        onClick={() => onOpenChange(false)}
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onTouchCancel={handleTouchCancel}
+      >
+        <img
+          src={current.src}
+          alt=""
+          className={cn(
+            "max-h-[98vh] max-w-[98vw] rounded-lg object-contain will-change-transform",
+            isGesturing ? "" : "transition-transform duration-150 ease-out",
+            transform.scale > minScale ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
           )}
+          style={{
+            transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            toggleZoom();
+          }}
+          onDoubleClick={(e) => {
+            e.stopPropagation();
+            toggleZoom();
+          }}
+          draggable={false}
+        />
+      </div>
 
-          <div
-            className="flex h-full w-full touch-none items-center justify-center overflow-hidden"
-            onClick={() => onOpenChange(false)}
-            onTouchStart={handleTouchStart}
-            onTouchMove={handleTouchMove}
-            onTouchEnd={handleTouchEnd}
-            onTouchCancel={handleTouchCancel}
-          >
-            <img
-              src={current.src}
-              alt=""
-              className={cn(
-                "max-h-[90vh] max-w-[90vw] rounded-lg object-contain will-change-transform",
-                isGesturing ? "" : "transition-transform duration-150 ease-out",
-                transform.scale > minScale ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in",
-              )}
-              style={{
-                transform: `translate3d(${transform.x}px, ${transform.y}px, 0) scale(${transform.scale})`,
-              }}
-              onClick={(e) => e.stopPropagation()}
-              onDoubleClick={(e) => {
-                e.stopPropagation();
-                toggleZoom();
-              }}
-              draggable={false}
-            />
-          </div>
-
-          {hasNext && transform.scale <= minScale && (
-            <button
-              type="button"
-              onClick={goNext}
-              className="absolute right-4 z-10 inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
-              aria-label="Ảnh tiếp theo"
-            >
-              <ChevronRight className="size-5" />
-            </button>
-          )}
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+      {hasNext && transform.scale <= minScale && (
+        <button
+          type="button"
+          onClick={goNext}
+          className="absolute right-4 z-[110] inline-flex size-10 items-center justify-center rounded-full bg-black/40 text-white/90 transition hover:bg-black/60"
+          aria-label="Ảnh tiếp theo"
+        >
+          <ChevronRight className="size-5" />
+        </button>
+      )}
+    </div>,
+    document.body
   );
 }
