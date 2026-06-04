@@ -263,6 +263,61 @@ export function ChatGPTOnboardCard() {
     }
   }
 
+  // Auto-login ONLY — establish the Google session in the profile WITHOUT
+  // adding any token to the pool. Prep a fresh account, then add providers
+  // (ChatGPT/Gemini/Flow) via the "Tái dùng" buttons. 2FA: TOTP auto, else
+  // approve on noVNC (device-tap).
+  async function autoLoginOnly() {
+    if (!draft.email.trim() || !draft.password) {
+      toast.error("Cần email + mật khẩu Google");
+      return;
+    }
+    const profile = profileSuggestion();
+    stopPolling();
+    setRunning(true);
+    setSession(null);
+    try {
+      const res = await fetch(`${cs.url}/v1/session/auto-login`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          profile,
+          email: draft.email.trim(),
+          password: draft.password,
+          totp_secret: draft.totpSecret.trim(),
+          prefer_method: draft.totpSecret.trim() ? "auth" : "tap",
+        }),
+      });
+      if (!res.ok) throw new Error(`auto-login HTTP ${res.status}`);
+      setSession({ ...(await res.json()), profile, email: draft.email.trim() });
+      const noVncUrl = cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1";
+      window.open(noVncUrl, "_blank", "noopener,width=1024,height=720");
+      toast.info(`Đang đăng nhập Google vào ${profile} (KHÔNG add pool)…`);
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const r = await fetch(`${cs.url}/v1/session/${encodeURIComponent(profile)}/auto-login-status`, {
+            headers: { Authorization: `Bearer ${cs.apiKey}` },
+          });
+          if (!r.ok) return;
+          const data = await r.json();
+          setSession({ ...data, profile, email: draft.email.trim() });
+          if (data.state === "success") {
+            stopPolling();
+            setRunning(false);
+            toast.success(`Đăng nhập ${profile} xong — CHƯA add pool. Dùng nút "Tái dùng" để thêm ChatGPT/Gemini/Flow.`);
+          } else if (data.state === "failed") {
+            stopPolling();
+            setRunning(false);
+            toast.error(`Login fail: ${data.error || data.message}`);
+          }
+        } catch { /* ignore */ }
+      }, 1500);
+    } catch (e: any) {
+      toast.error(`Auto-login error: ${e?.message}`);
+      setRunning(false);
+    }
+  }
+
   async function submit2faCode() {
     if (!session?.profile || !draft.code.trim()) {
       toast.error("Cần mã 2FA");
@@ -450,6 +505,14 @@ export function ChatGPTOnboardCard() {
               {running
                 ? <><LoaderCircle className="size-3.5 animate-spin" /> Đang chạy…</>
                 : <><Sparkles className="size-3.5" /> Tự động setup (1-click)</>}
+            </Button>
+            <Button
+              className="h-9 rounded-lg border border-amber-300 bg-amber-50 px-3 text-xs font-semibold text-amber-800 hover:bg-amber-100"
+              onClick={autoLoginOnly}
+              disabled={running || !draft.email.trim() || !draft.password}
+              title="Chỉ đăng nhập Google vào profile, KHÔNG add vào pool. Sau đó dùng nút Tái dùng để thêm provider."
+            >
+              <KeyRound className="size-3.5" /> Chỉ đăng nhập
             </Button>
             <Button
               className="h-9 rounded-lg border border-blue-200 bg-white px-3 text-xs text-blue-700 hover:bg-blue-50"

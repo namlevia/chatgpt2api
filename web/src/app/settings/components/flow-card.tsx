@@ -313,7 +313,11 @@ export function FlowCard() {
       toast.error("Cần điền email + mật khẩu cho 1-click");
       return;
     }
-    const profile = suggestedProfile;  // auto-pick next free
+    // Account-centric profile (provider-neutral) so logging in via Flow vs
+    // ChatGPT vs Gemini produces the SAME profile for one Google account —
+    // one profile per account, clean cross-provider reuse. (Was google-fx-N.)
+    const local = (autoLogin.email.split("@")[0] || "fx").replace(/[^a-z0-9-]/gi, "-");
+    const profile = `google-${local}`;
     const label = suggestedLabel;
     stopPolling();
     setOneClickRunning(true);
