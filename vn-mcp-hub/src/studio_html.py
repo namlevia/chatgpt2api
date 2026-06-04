@@ -473,7 +473,10 @@ STUDIO_HTML = r"""<!DOCTYPE html>
       <label for="r2key">Access Key ID</label>
       <input id="r2key" placeholder="...">
       <label for="r2secret">Secret Access Key</label>
-      <input id="r2secret" type="password" placeholder="...">
+      <div style="position: relative;">
+        <input id="r2secret" type="password" placeholder="..." style="padding-right: 36px;">
+        <span onclick="const i=document.getElementById('r2secret'); i.type=i.type==='password'?'text':'password'; this.textContent=i.type==='password'?'👁️':'🙈';" style="position: absolute; right: 12px; top: 11px; cursor: pointer; user-select: none; opacity: 0.6;" title="Hiện/ẩn mã">👁️</span>
+      </div>
       <button type="submit" class="btn-go">Luu cau hinh R2</button>
       <span id="r2Status" class="status-ok"></span>
     </form>
