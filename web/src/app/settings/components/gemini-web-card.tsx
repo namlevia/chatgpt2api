@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
 import { SavedAccountsSelect } from "@/components/saved-accounts-select";
 import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
+import { ReuseProfilePicker } from "./reuse-profile-picker";
 
 type OnboardState = {
   profile: string;
@@ -135,6 +136,61 @@ export function GeminiWebCard() {
     }
   }
 
+  // Cách A — reuse an existing profile's Google session for Gemini Web (no
+  // email/password). Onboard short-circuits if the session is alive, then we
+  // point the gemini_web provider at this profile.
+  async function reuseOnboard(prof: string) {
+    stopPolling();
+    setProfile(prof);
+    setRunning(true);
+    setSession(null);
+    try {
+      const res = await fetch(`${cs.url}/v1/gemini-web/onboard`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: prof }),
+      });
+      if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
+      setSession(await res.json());
+      toast.info(`Đang tái dùng ${prof} cho Gemini Web…`);
+      pollRef.current = window.setInterval(async () => {
+        try {
+          const r = await fetch(`${cs.url}/v1/gemini-web/${encodeURIComponent(prof)}/onboard-status`, {
+            headers: { Authorization: `Bearer ${cs.apiKey}` },
+          });
+          if (!r.ok) return;
+          const data: OnboardState = await r.json();
+          setSession(data);
+          if (data.state === "success") {
+            stopPolling();
+            setRunning(false);
+            try {
+              const cur = await request.get("/api/settings");
+              const config = (cur.data as any)?.config || {};
+              config.providers = config.providers || {};
+              config.providers.gemini_web = {
+                ...(config.providers.gemini_web || {}),
+                enabled: true,
+                profile: prof,
+              };
+              await request.put("/api/settings", { config });
+              toast.success(`Gemini Web dùng profile ${prof} ✓`);
+            } catch (e: any) {
+              toast.error(`Lưu config fail: ${e?.message || e}`);
+            }
+          } else if (data.state === "failed") {
+            stopPolling();
+            setRunning(false);
+            toast.error(`Reuse fail: ${data.error || data.message}`);
+          }
+        } catch { /* ignore */ }
+      }, 1500);
+    } catch (e: any) {
+      toast.error(`Reuse error: ${e?.message}`);
+      setRunning(false);
+    }
+  }
+
   async function onboard() {
     if (!draft.email.trim() || !draft.password) {
       toast.error("Cần email + mật khẩu Google");
@@ -247,6 +303,14 @@ export function GeminiWebCard() {
             {savingCfg ? <LoaderCircle className="size-3.5 animate-spin" /> : <Save className="size-3.5" />}
             {" "}Lưu config
           </Button>
+        </div>
+
+        <div className="space-y-1 rounded-xl border border-emerald-200 bg-emerald-50/50 p-3">
+          <p className="text-xs font-bold text-emerald-800">Tái dùng profile đã onboard</p>
+          <p className="text-[10px] text-emerald-700/70 leading-relaxed">
+            Chọn profile Google đã có session (qua Flow/ChatGPT/Gemini) → dùng cho Gemini Web, không cần đăng nhập lại.
+          </p>
+          <ReuseProfilePicker cs={cs} onReuse={reuseOnboard} />
         </div>
 
         <div className="space-y-2 rounded-xl border-2 border-violet-300 bg-gradient-to-br from-violet-50/60 to-fuchsia-50/60 p-3">

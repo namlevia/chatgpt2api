@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
 import { SavedAccountsSelect } from "@/components/saved-accounts-select";
+import { ReuseProfilePicker } from "./reuse-profile-picker";
 import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
 
 type FlowAccount = {
@@ -203,6 +204,35 @@ export function FlowCard() {
   function removeAccount(idx: number) {
     const next = { ...cfg, accounts: cfg.accounts.filter((_, i) => i !== idx) };
     void save(next);
+  }
+
+  // Cách A — reuse an existing profile's Google session for Flow: fetch/create
+  // a project on that profile (no login) and add it to the pool.
+  async function reuseAccount(prof: string) {
+    if (cfg.accounts.some((a) => a.profile === prof)) {
+      toast.info(`${prof} đã có trong pool`);
+      return;
+    }
+    const url = cfg.captcha_solver_url;
+    const key = cfg.captcha_solver_api_key;
+    try {
+      toast.info(`Đang lấy Flow project cho ${prof}…`);
+      const res = await fetch(`${url}/v1/google/flow/get-or-create-project`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${key}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: prof, headless: true, timeout: 150 }),
+      });
+      if (!res.ok) throw new Error(`get-project HTTP ${res.status}`);
+      const data = await res.json();
+      const projectId = data.project_id;
+      if (!projectId) throw new Error(data.detail || data.error || "no project_id");
+      const label = nextLabel(cfg.accounts.map((a) => a.label || ""));
+      const next = { ...cfg, accounts: [...cfg.accounts, { profile: prof, project_id: String(projectId), label }] };
+      await save(next);
+      toast.success(`Đã thêm ${prof} vào Flow (project ${String(projectId).slice(0, 8)}…)`);
+    } catch (e: any) {
+      toast.error(`Reuse Flow lỗi: ${e?.message || e}`);
+    }
   }
 
   function openNoVNC() {
@@ -564,6 +594,18 @@ export function FlowCard() {
             ))}
           </div>
         )}
+
+        {/* Reuse existing profile (Cách A) */}
+        <div className="space-y-1 rounded-xl border border-emerald-200 bg-emerald-50/60 p-3">
+          <p className="text-xs font-semibold text-emerald-800">Tái dùng profile đã onboard</p>
+          <p className="text-[10px] text-emerald-700/70 leading-relaxed">
+            Chọn profile Google đã có session (Flow/ChatGPT/Gemini) → tự lấy project_id + thêm vào pool, không cần đăng nhập.
+          </p>
+          <ReuseProfilePicker
+            cs={{ url: cfg.captcha_solver_url, apiKey: cfg.captcha_solver_api_key }}
+            onReuse={reuseAccount}
+          />
+        </div>
 
         {/* Add new account */}
         <div className="space-y-2 rounded-xl border border-dashed border-emerald-300 bg-white/40 p-3">
