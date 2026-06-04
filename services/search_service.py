@@ -1134,6 +1134,23 @@ class SearchService:
             ex.shutdown(wait=False)
 
         logger.info({"event": "search_all_done", "total": len(all_results), "took": time.time() - start_t})
+
+        # Fallback: nếu KB được query nhưng trả về rỗng → search live để bù vào
+        if kb_collections and not all_results:
+            logger.info({"event": "search_kb_empty_fallback_live", "collections": kb_collections})
+            for n in backend_names:
+                try:
+                    backend = self._get_backend(n)
+                    if not backend:
+                        continue
+                    results = backend.search(query, max(2, self.max_results))
+                    if results:
+                        all_results.extend(results)
+                        logger.info({"event": "search_kb_fallback_ok", "backend": n, "count": len(results)})
+                        break
+                except Exception:
+                    continue
+
         return all_results[:self.max_results * 4]
 
     def curate_response(self, query: str, response: str, collection: str = "") -> bool:
