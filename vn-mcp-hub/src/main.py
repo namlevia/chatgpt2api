@@ -209,9 +209,9 @@ def create_app() -> FastAPI:
 
     @app.post("/api/rag/upload/{collection}")
     async def rag_upload_r2(collection: str):
-        """Upload a collection to Cloudflare R2."""
-        from src.rag.cloud import upload_collection
-        ok = upload_collection(collection)
+        """Upload a collection to Cloudflare R2 (Using 2-Way Sync)."""
+        from src.rag.cloud import sync_collection_2way
+        ok = sync_collection_2way(collection)
         return {"ok": ok, "collection": collection}
 
     @app.post("/api/rag/refresh/{collection}")
