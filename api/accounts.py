@@ -512,14 +512,14 @@ def create_router() -> APIRouter:
         tokens = [str(token or "").strip() for token in body.tokens if str(token or "").strip()]
         if not tokens:
             raise HTTPException(status_code=400, detail={"error": "tokens is required"})
-        # Snapshot accounts BEFORE deletion so we can derive each one's
-        # captcha-solver browser profile (google-<email-localpart>) and remove
-        # it too — otherwise a UI delete leaves an orphaned profile dir on disk
-        # (the desync đại ca hit). Best-effort: API delete never fails on this.
-        doomed = [account_service.get_account(t) for t in tokens]
-        result = account_service.delete_accounts(tokens)
-        await run_in_threadpool(_cleanup_captcha_profiles, [a for a in doomed if a])
-        return result
+        # Per-provider isolation (đại ca's requirement): deleting a ChatGPT-pool
+        # token removes ONLY the pool entry. We deliberately do NOT delete the
+        # captcha-solver browser profile — it is an account-centric
+        # (google-<localpart>) Google SESSION shared across ChatGPT/Flow/Gemini,
+        # and the saved-credential vault is a separate store. Wiping a profile or
+        # a saved credential is its own explicit action, never a delete side
+        # effect. (_cleanup_captcha_profiles kept for a future explicit endpoint.)
+        return account_service.delete_accounts(tokens)
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):

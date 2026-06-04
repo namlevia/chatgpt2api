@@ -63,8 +63,19 @@ export function SavedAccountsSelect({ csUrl, csApiKey, selected, onSelect, disab
       if (res.ok) {
         const acct = await res.json();
         onSelect(email, acct);
+        return;
       }
-    } catch { toast.error("Không load được tài khoản"); }
+      // Stale cache: dropdown showed an account that no longer exists on the
+      // server (404) or auth changed. Don't fail silently — warn + reset the
+      // selection + refresh the list so it self-heals.
+      onSelect("", { email: "", password: "", totp_secret: "" });
+      if (res.status === 404) {
+        toast.error("Tài khoản này không còn trên server — đã làm mới danh sách");
+      } else {
+        toast.error(`Không load được tài khoản (HTTP ${res.status})`);
+      }
+      void fetchAccounts();
+    } catch { toast.error("Không load được tài khoản (mạng/captcha-solver)"); }
   }
 
   async function deleteAccount(email: string) {
