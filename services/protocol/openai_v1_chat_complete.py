@@ -1323,6 +1323,20 @@ def _prefetch_ha_context_if_needed(
         cleaned_messages.append(m)
     messages = cleaned_messages
 
+    # Hard cap: measure current payload size, trim context to fit within 38KB total
+    # chatgpt.com free rejects payloads >45KB (413). Leave 7KB headroom for overhead.
+    _MAX_PAYLOAD_CHARS = 38_000
+    current_payload_chars = sum(len(str(m.get("content", ""))) for m in messages)
+    available = _MAX_PAYLOAD_CHARS - current_payload_chars
+    if available < 500:
+        logger.info({"event": "ha_prefetch_skip_payload_full",
+                     "current_chars": current_payload_chars, "max": _MAX_PAYLOAD_CHARS})
+        return messages
+    if len(msg_context) > available:
+        msg_context = msg_context[:available]
+        logger.info({"event": "ha_prefetch_context_trimmed",
+                     "trimmed_to": available, "original": len(live_summary)})
+
     # Inject into the LAST user message
     injected = []
     injected_flag = False
