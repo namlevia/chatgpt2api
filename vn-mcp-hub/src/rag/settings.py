@@ -104,7 +104,11 @@ def get_storage_mode() -> str:
 
 
 def should_use_cloud() -> bool:
-    return get_storage_mode() in ("cloud", "both")
+    mode = get_storage_mode()
+    if mode in ("cloud", "both"):
+        return True
+    from pathlib import Path
+    return Path("/app/data/studio/r2.json").exists()
 
 
 def should_use_local() -> bool:
