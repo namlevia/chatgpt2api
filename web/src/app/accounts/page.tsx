@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
@@ -246,19 +246,26 @@ function formatRelativeTime(value: string | null | undefined, lang: "vi" | "en")
 }
 
 function QuotaBar({
-  label, used, max, resetAfter
-}: { label: string; used: number; max: number; resetAfter?: string | null }) {
+  label, remaining, total, resetAfter, ordinal
+}: { label: string; remaining: number; total?: number; resetAfter?: string | null; ordinal?: number }) {
+  const hasMax = total !== undefined;
+  const max = hasMax ? total : 40;
+  const used = Math.max(0, max - remaining);
   const pct = max > 0 ? Math.min(100, Math.round((used / max) * 100)) : 0;
-  const remaining = Math.max(0, max - used);
-  const remainPct = 100 - pct;
+  const remainPct = hasMax ? 100 - pct : (remaining > 0 ? 100 : 0);
+  
   const dotColor = remainPct > 70 ? "bg-emerald-500" : remainPct > 30 ? "bg-amber-400" : "bg-rose-500";
   const barColor = remainPct > 70 ? "bg-emerald-500" : remainPct > 30 ? "bg-amber-400" : "bg-rose-500";
+  
   return (
     <div className="space-y-1.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
           <span className={`size-2 rounded-full shrink-0 ${dotColor}`} />
           <span className="text-[11px] font-medium text-slate-500">{label}</span>
+          {ordinal !== undefined && (
+            <span className="ml-1 px-1.5 py-0.5 rounded-[4px] bg-indigo-50 text-indigo-600 text-[9px] font-bold">#{ordinal}</span>
+          )}
         </div>
         {resetAfter && (
           <span className="text-[10px] text-slate-400 shrink-0">{resetAfter}</span>
@@ -271,12 +278,14 @@ function QuotaBar({
             style={{ width: `${remainPct}%` }}
           />
         </div>
-        <span className="text-[11px] text-slate-500 shrink-0 w-20 text-right">
-          {remaining} / {max}
+        <span className="text-[11px] text-slate-500 shrink-0 min-w-[50px] text-right">
+          {hasMax ? `${remaining} / ${total}` : (remaining > 0 ? `Còn ${remaining}` : "Hết lượt")}
         </span>
-        <span className={`text-[11px] font-bold shrink-0 w-8 text-right ${dotColor.replace('bg-', 'text-')}`}>
-          {remainPct}%
-        </span>
+        {hasMax && (
+          <span className={`text-[11px] font-bold shrink-0 w-8 text-right ${dotColor.replace('bg-', 'text-')}`}>
+            {remainPct}%
+          </span>
+        )}
       </div>
     </div>
   );
@@ -922,6 +931,25 @@ function AccountsPageContent() {
                       {/* ChatGPT: groups by account type */}
                       {provider.type === "accounts" && provider.groups?.map((group: any) => {
                         const isGroupOpen = expandedGroups.has(`${provider.provider}/${group.key}`);
+                        
+                        const featureRanks: Record<string, Record<string, number>> = {};
+                        group.items?.forEach((acc: any) => {
+                          if (acc.status !== 'active') return;
+                          
+                          const igRemaining = Math.max(0, acc.quota || 0);
+                          if (igRemaining > 0) {
+                            if (!featureRanks['image_gen']) featureRanks['image_gen'] = {};
+                            featureRanks['image_gen'][acc.access_token] = Object.keys(featureRanks['image_gen']).length + 1;
+                          }
+
+                          acc.limits_progress?.forEach((lp: any) => {
+                            if ((lp.remaining ?? 0) > 0) {
+                              if (!featureRanks[lp.feature_name]) featureRanks[lp.feature_name] = {};
+                              featureRanks[lp.feature_name][acc.access_token] = Object.keys(featureRanks[lp.feature_name]).length + 1;
+                            }
+                          });
+                        });
+
                         return (
                           <div key={group.key}>
                             <button
@@ -963,6 +991,28 @@ function AccountsPageContent() {
                               // type's priority queue (always tried first by the
                               // backend until it 429s). 1-indexed for humans.
                               const ordinal = accountIdx + 1;
+                              
+                              const topFeatures: string[] = [];
+                              if (featureRanks['image_gen']?.[account.access_token] === 1) topFeatures.push("Ảnh");
+                              account.limits_progress?.forEach((lp: any) => {
+                                const rank = featureRanks[lp.feature_name]?.[account.access_token];
+                                if (rank === 1) {
+                                  topFeatures.push(t(lp.feature_name as TranslationKey) ?? lp.feature_name);
+                                }
+                              });
+                              const uniqueTop = Array.from(new Set(topFeatures));
+
+                              const exhausted: string[] = [];
+                              account.limits_progress?.forEach((lp: any) => {
+                                if ((lp.remaining ?? 0) <= 0) {
+                                  exhausted.push(t(lp.feature_name as TranslationKey) ?? lp.feature_name);
+                                }
+                              });
+                              if (!isUnlimited && !imageQuotaUnknown(account) && quotaVal <= 0) {
+                                exhausted.push("Ảnh");
+                              }
+                              const uniqueExhausted = Array.from(new Set(exhausted));
+
                               return (
                                 <div key={account.access_token}>
                                   <div
@@ -1005,19 +1055,35 @@ function AccountsPageContent() {
                                       <UserRound className="size-3 text-white" />
                                     </div>
                                     <div className="flex-1 min-w-0">
-                                      <div className="flex items-center gap-1.5">
-                                        <span className="text-[12px] font-medium text-slate-700 truncate max-w-[140px]">
-                                          {accountLabel(account)}
-                                        </span>
-                                        <Badge variant={status.badge} className="inline-flex items-center gap-0.5 rounded text-[10px] px-1 py-0">
-                                          <StatusIcon className="size-2.5" />
-                                          {translateStatus(account.status, lang)}
-                                        </Badge>
-                                        {account.type && account.type !== account.plan ? (
-                                          <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-amber-50 text-amber-700 border border-amber-200">
-                                            {account.type}
+                                      <div className="flex flex-col gap-1">
+                                        <div className="flex items-center gap-1.5">
+                                          <span className="text-[12px] font-medium text-slate-700 truncate max-w-[140px]">
+                                            {accountLabel(account)}
+                                          </span>
+                                          <Badge variant={status.badge} className="inline-flex items-center gap-0.5 rounded text-[10px] px-1 py-0">
+                                            <StatusIcon className="size-2.5" />
+                                            {translateStatus(account.status, lang)}
                                           </Badge>
-                                        ) : null}
+                                          {account.type && account.type !== account.plan ? (
+                                            <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-amber-50 text-amber-700 border border-amber-200">
+                                              {account.type}
+                                            </Badge>
+                                          ) : null}
+                                        </div>
+                                        {(uniqueTop.length > 0 || uniqueExhausted.length > 0) && (
+                                          <div className="flex flex-wrap items-center gap-1">
+                                            {uniqueTop.map(f => (
+                                              <Badge key={`top-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-indigo-50 text-indigo-600 border border-indigo-100 font-medium">
+                                                {f} #1
+                                              </Badge>
+                                            ))}
+                                            {uniqueExhausted.map(f => (
+                                              <Badge key={`ex-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-rose-50 text-rose-500 border border-rose-100 font-medium">
+                                                Hết {f}
+                                              </Badge>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                     <div className="hidden sm:flex items-center gap-2 text-[11px]">
@@ -1073,10 +1139,10 @@ function AccountsPageContent() {
                                           {isUnlimited ? (
                                             <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-violet-500" /><span className="text-[11px] text-slate-500">Ảnh:</span><span className="text-[12px] font-bold text-violet-600">∞ không giới hạn</span></div>
                                           ) : !imageQuotaUnknown(account) ? (
-                                            <QuotaBar label="Ảnh" used={Math.max(0, 100 - quotaVal)} max={100} resetAfter={account.restore_at ? formatRestoreAt(account.restore_at, lang).relative : undefined} />
+                                            <QuotaBar label="Ảnh" remaining={quotaVal} resetAfter={account.restore_at ? formatRestoreAt(account.restore_at, lang).relative : undefined} ordinal={featureRanks['image_gen']?.[account.access_token]} />
                                           ) : null}
                                           {account.limits_progress?.map((lp, i) => (
-                                            <QuotaBar key={i} label={t(lp.feature_name as TranslationKey) ?? lp.feature_name ?? `Limit ${i + 1}`} used={Math.max(0, (lp as any).total ?? 100) - (lp.remaining ?? 0)} max={(lp as any).total ?? Math.max(lp.remaining ?? 0, 40)} resetAfter={lp.reset_after ? formatRestoreAt(lp.reset_after, lang).relative : undefined} />
+                                            <QuotaBar key={i} label={t(lp.feature_name as TranslationKey) ?? lp.feature_name ?? `Limit ${i + 1}`} remaining={lp.remaining ?? 0} total={(lp as any).total} resetAfter={lp.reset_after ? formatRestoreAt(lp.reset_after, lang).relative : undefined} ordinal={featureRanks[lp.feature_name]?.[account.access_token]} />
                                           ))}
                                           <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
                                             <span>Dùng lần cuối</span>
