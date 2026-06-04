@@ -164,10 +164,6 @@ export function ImageLightbox({
   useEffect(() => {
     if (!open) return;
 
-    // Lock body scroll
-    const originalOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowLeft") {
         e.preventDefault();
@@ -183,7 +179,6 @@ export function ImageLightbox({
 
     window.addEventListener("keydown", handleKeyDown);
     return () => {
-      document.body.style.overflow = originalOverflow;
       window.removeEventListener("keydown", handleKeyDown);
     };
   }, [open, goPrev, goNext, onOpenChange]);
@@ -425,7 +420,6 @@ export function ImageLightbox({
           }}
           onClick={(e) => {
             e.stopPropagation();
-            toggleZoom();
           }}
           onDoubleClick={(e) => {
             e.stopPropagation();
