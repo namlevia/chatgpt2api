@@ -598,6 +598,65 @@ async def generate_image(
             logger.warning("flow_submit: no button found, trying Ctrl+Enter")
             await page.keyboard.press("Control+Enter")
 
+        async def _reprep() -> bool:
+            """For a RETRY: re-navigate to the project + re-enter the prompt so a
+            subsequent submit click fires a genuinely NEW flowMedia POST. A bare
+            re-click after a rejected submit fires nothing (Slate is cleared /
+            the button re-disables), so a fresh page load is required. Returns
+            True if the prompt was accepted (submit enabled)."""
+            try:
+                await page.goto(flow_url, wait_until="domcontentloaded", timeout=30_000)
+                await page.wait_for_function(
+                    "() => { const c = Array.from(document.querySelectorAll('[contenteditable=true]')); return c.some(e => e.offsetWidth > 200 && e.offsetHeight > 0); }",
+                    timeout=45_000,
+                )
+            except Exception as _exc:
+                logger.warning("flow_reprep_nav_failed: %s", str(_exc)[:120])
+                return False
+            try:
+                await page.evaluate("""() => {
+                    document.querySelectorAll('[data-state="open"]').forEach(el => {
+                        if (el.getAttribute('role')) return;
+                        const r = el.getBoundingClientRect();
+                        if (r.width >= window.innerWidth * 0.8 && r.height >= window.innerHeight * 0.8) { el.remove(); }
+                    });
+                }""")
+            except Exception:
+                pass
+            await asyncio.sleep(0.3)
+            try:
+                await page.locator("[contenteditable='true']").first.click(timeout=5000)
+            except Exception:
+                pass
+            await page.evaluate(
+                """(text) => {
+                    const ce = document.querySelector('[contenteditable=true]');
+                    if (!ce) return false;
+                    ce.focus();
+                    const sel = window.getSelection();
+                    const rng = document.createRange();
+                    rng.selectNodeContents(ce);
+                    sel.removeAllRanges();
+                    sel.addRange(rng);
+                    // clear any leftover text first so we don't append on retry
+                    ce.dispatchEvent(new InputEvent('beforeinput', {inputType: 'deleteContentBackward', bubbles: true, cancelable: true}));
+                    ce.dispatchEvent(new InputEvent('input', {inputType: 'deleteContentBackward', bubbles: true, cancelable: true}));
+                    ce.dispatchEvent(new InputEvent('beforeinput', {inputType: 'insertText', data: text, bubbles: true, cancelable: true}));
+                    ce.dispatchEvent(new InputEvent('input', {inputType: 'insertText', data: text, bubbles: true, cancelable: true}));
+                    return true;
+                }""",
+                prompt,
+            )
+            await asyncio.sleep(0.5)
+            state = await page.evaluate(
+                """() => {
+                    const b = Array.from(document.querySelectorAll('button')).find(b => /arrow_forward[\\s\\n]+(Tạo|Generate|Create|Send|Submit)/i.test(b.innerText || ''));
+                    return b ? b.getAttribute('aria-disabled') : 'no-submit';
+                }"""
+            )
+            logger.info("flow_reprep submit_aria_disabled=%s", state)
+            return state != "true"
+
         # 4) Submit with reCAPTCHA retry, bounded by a WALL-CLOCK budget so the
         # call always returns before the caller's HTTP timeout (no hangs). The
         # score is borderline on a GPU-less server, so: humanize ONCE up front
@@ -608,7 +667,7 @@ async def generate_image(
         # generate) so a success is never cut off mid-flight.
         _budget = max(60, timeout - 15)   # seconds for the whole retry phase
         _deadline = started + _budget
-        _GEN_RESERVE = 50                 # a successful POST needs ~45s to return
+        _GEN_RESERVE = 62                 # retry re-nav (~15s) + a successful POST (~45s)
         _per_try = 55
         response = None
         last_err = ""
@@ -623,9 +682,15 @@ async def generate_image(
                 break
             _attempt += 1
             if _attempt > 1:
-                # Cheap fresh interaction (history already built) so more
-                # attempts fit in the budget.
-                await _humanize(page, moves=2)
+                # A bare re-click after a reject fires NO new POST (Slate
+                # cleared / submit re-disabled). Re-navigate + re-enter the
+                # prompt to arm a genuinely fresh submit, then a light humanize.
+                if not await _reprep():
+                    last_err = "re-prep failed (prompt not accepted / nav failed)"
+                    logger.warning("flow_reprep failed attempt=%d", _attempt)
+                    await asyncio.sleep(1.0)
+                    continue
+                await _humanize(page, moves=4)
             await _refresh_recaptcha()
             try:
                 async with page.expect_response(
