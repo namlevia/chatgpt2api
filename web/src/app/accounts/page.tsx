@@ -1015,36 +1015,25 @@ function AccountsPageContent() {
 
                               return (
                                 <div key={account.access_token}>
-                                  <div
-                                    className={cn(
-                                      "flex items-center gap-3 pl-12 pr-5 py-2.5 hover:bg-slate-50/60 cursor-pointer transition-colors",
-                                      accountExpanded && "bg-indigo-50/40"
-                                    )}
-                                    onClick={() => setExpandedId(accountExpanded ? null : account.access_token)}
-                                  >
-                                    <Checkbox
-                                      className="size-4"
-                                      checked={selectedIds.includes(account.access_token)}
-                                      onClick={(e) => e.stopPropagation()}
-                                      onCheckedChange={(checked) => {
-                                        if (checked) {
-                                          setSelectedIds(prev => [...prev, account.access_token]);
-                                        } else {
-                                          setSelectedIds(prev => prev.filter(id => id !== account.access_token));
-                                        }
-                                      }}
-                                    />
-                                    <span
+                                    <div
                                       className={cn(
-                                        "shrink-0 inline-flex items-center justify-center min-w-[28px] h-5 px-1.5 rounded-md text-[11px] font-mono font-bold tabular-nums",
-                                        ordinal === 1
-                                          ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300"
-                                          : "bg-slate-100 text-slate-500"
+                                        "flex items-center gap-3 pl-12 pr-5 py-2.5 hover:bg-slate-50/60 cursor-pointer transition-colors",
+                                        accountExpanded && "bg-indigo-50/40"
                                       )}
-                                      title={ordinal === 1 ? "Tài khoản ưu tiên #1 — luôn được dùng trước" : `Vị trí #${ordinal} trong hàng đợi`}
+                                      onClick={() => setExpandedId(accountExpanded ? null : account.access_token)}
                                     >
-                                      #{ordinal}
-                                    </span>
+                                      <Checkbox
+                                        className="size-4"
+                                        checked={selectedIds.includes(account.access_token)}
+                                        onClick={(e) => e.stopPropagation()}
+                                        onCheckedChange={(checked) => {
+                                          if (checked) {
+                                            setSelectedIds(prev => [...prev, account.access_token]);
+                                          } else {
+                                            setSelectedIds(prev => prev.filter(id => id !== account.access_token));
+                                          }
+                                        }}
+                                      />
                                     <div className={cn(
                                       "size-7 shrink-0 rounded-full flex items-center justify-center",
                                       account.status === "active" ? "bg-gradient-to-br from-indigo-500 to-blue-600"
