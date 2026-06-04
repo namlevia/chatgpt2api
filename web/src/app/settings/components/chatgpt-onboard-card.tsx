@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/input";
 import { request } from "@/lib/request";
 import { SavedAccountsSelect } from "@/components/saved-accounts-select";
 import { generateTotpCode, totpSecondsRemaining } from "@/lib/totp";
+import { ReuseProfilePicker } from "./reuse-profile-picker";
 
 type OnboardState = {
   profile: string;
@@ -215,6 +216,53 @@ export function ChatGPTOnboardCard() {
     }
   }
 
+  // Cách A — reuse an existing profile's Google session (no email/password).
+  // Used when the account was already onboarded via Flow / Gemini Web first.
+  async function reuseOnboard(profile: string) {
+    stopPolling();
+    setRunning(true);
+    setSession(null);
+    try {
+      const res = await fetch(`${cs.url}/v1/chatgpt/onboard`, {
+        method: "POST",
+        headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ profile, reuse_session: true }),
+      });
+      if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
+      const initial = await res.json();
+      setSession(initial);
+      toast.info(`Đang tái dùng session của ${profile}…`);
+      const handleSuccess = async (s: OnboardState) => {
+        if (!s.access_token) {
+          toast.error("Tái dùng OK nhưng không có access_token");
+          setRunning(false);
+          return;
+        }
+        try {
+          const label = s.captured_email || profile;
+          await request.post("/api/accounts", { tokens: [s.access_token] });
+          try {
+            await request.post("/api/accounts/update", {
+              access_token: s.access_token,
+              type: `free,${label?.split("@")[0] || profile}`,
+            });
+          } catch { /* tag best-effort */ }
+          toast.success(`Đã thêm ${label} vào pool (tái dùng)`);
+        } catch (e: any) {
+          toast.error(`Add to pool fail: ${e?.message || e}`);
+        } finally {
+          setRunning(false);
+        }
+      };
+      pollRef.current = window.setInterval(() => {
+        void pollOnboardStatus(profile, handleSuccess);
+      }, 1500);
+    } catch (e: any) {
+      toast.error(`Reuse error: ${e?.message}`);
+      setRunning(false);
+    }
+  }
+
   async function submit2faCode() {
     if (!session?.profile || !draft.code.trim()) {
       toast.error("Cần mã 2FA");
@@ -375,6 +423,12 @@ export function ChatGPTOnboardCard() {
                 <span className="text-[10px] text-amber-500">({totpRemaining}s)</span>
               </div>
             )}
+          </div>
+          <div className="rounded-lg border border-emerald-200 bg-emerald-50/50 p-2 space-y-1">
+            <p className="text-[11px] font-medium text-emerald-700">
+              Tái dùng profile đã onboard (Flow/Gemini/ChatGPT) — không cần nhập lại email/mật khẩu:
+            </p>
+            <ReuseProfilePicker cs={cs} onReuse={reuseOnboard} />
           </div>
           <div className="flex flex-wrap items-center gap-2 pt-1">
             <Button
