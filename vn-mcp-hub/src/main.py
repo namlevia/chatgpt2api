@@ -613,8 +613,6 @@ def create_app() -> FastAPI:
         r2_file = Path("/app/data/studio/r2.json")
         if r2_file.exists():
             cfg = json.loads(r2_file.read_text(encoding="utf-8"))
-            if cfg.get("secret_access_key"):
-                cfg["secret_access_key"] = "****" + cfg["secret_access_key"][-4:]
             return {"configured": True, "config": cfg}
         return {"configured": False, "config": {}}
 
