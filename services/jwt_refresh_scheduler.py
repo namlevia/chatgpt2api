@@ -58,9 +58,11 @@ def _decode_jwt_payload(token: str) -> dict[str, Any] | None:
 
 
 def _profile_for_email(email: str) -> str:
+    # Account-centric, provider-neutral profile name (was chatgpt-<local>) so
+    # one Google account = one profile shared across ChatGPT/Gemini/Flow.
     local = (email.split("@", 1)[0] or "default")
     safe = "".join(c if c.isalnum() or c == "-" else "-" for c in local)
-    return f"chatgpt-{safe}"
+    return f"google-{safe}"
 
 
 def _captcha_solver_cfg() -> tuple[str, str]:

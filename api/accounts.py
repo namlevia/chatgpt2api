@@ -26,11 +26,12 @@ from utils.log import logger
 
 
 def _profile_for_email(email: str) -> str:
-    """chatgpt-<email-localpart> — same convention as jwt_refresh_scheduler /
-    the chatgpt-onboard card, so we delete the right captcha-solver profile."""
+    """google-<email-localpart> — account-centric, provider-neutral convention
+    (matches jwt_refresh_scheduler + the onboard cards) so we target the right
+    captcha-solver profile. One Google account = one profile across providers."""
     local = (email.split("@", 1)[0] or "default")
     safe = "".join(c if c.isalnum() or c == "-" else "-" for c in local)
-    return f"chatgpt-{safe}"
+    return f"google-{safe}"
 
 
 def _cleanup_captcha_profiles(accounts: list[dict]) -> None:
