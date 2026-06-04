@@ -116,11 +116,20 @@ def handle_free_chat(
     # Retry loop: when an account 429/quota-burns or expires, rotate to the
     # next free account. Non-quota errors re-raise immediately so real bugs
     # aren't masked.
+    requires_image = False
+    for m in messages:
+        c = m.get("content")
+        if isinstance(c, list):
+            for p in c:
+                if isinstance(p, dict) and p.get("type") in ("image_url", "input_image"):
+                    requires_image = True
+                    break
+
     excluded_tokens: set[str] = set()
     last_quota_error: Exception | None = None
     for attempt in range(8):
         token = account_service.get_text_access_token(
-            excluded_tokens=excluded_tokens, account_type="free"
+            excluded_tokens=excluded_tokens, account_type="free", requires_image=requires_image
         )
         if not token:
             break
@@ -138,6 +147,7 @@ def handle_free_chat(
                 or "rate limit" in err_msg
                 or "rate_limit" in err_msg
                 or "too many requests" in err_msg
+                or "hit your limit" in err_msg
             )
             is_payload_too_large = (
                 "413" in err_msg or "payload too large" in err_msg
@@ -179,8 +189,10 @@ def handle_free_chat(
                 raise
             
             try:
-                account_service.update_account(token, {"quota": 0, "status": "limited"})
-                account_service.demote_account(token)
+                if requires_image and ("file" in err_msg or "image" in err_msg or "upload" in err_msg or "413" in err_msg or "limit" in err_msg):
+                    account_service.mark_image_failed(token)
+                else:
+                    account_service.demote_account(token)
             except Exception:
                 pass
                 

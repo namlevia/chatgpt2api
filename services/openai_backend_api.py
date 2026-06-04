@@ -87,7 +87,7 @@ class OpenAIBackendAPI:
             "User-Agent": self.user_agent,
             "Origin": self.base_url,
             "Referer": self.base_url + "/",
-            "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8,en-US;q=0.7",
+            "Accept-Language": "vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7",
             "Cache-Control": "no-cache",
             "Pragma": "no-cache",
             "Priority": "u=1, i",
@@ -105,7 +105,7 @@ class OpenAIBackendAPI:
             "Sec-Fetch-Site": "same-origin",
             "OAI-Device-Id": self.device_id,
             "OAI-Session-Id": self.session_id,
-            "OAI-Language": "zh-CN",
+            "OAI-Language": "en-US",
             "OAI-Client-Version": self.client_version,
             "OAI-Client-Build-Number": self.client_build_number,
         })
@@ -153,10 +153,33 @@ class OpenAIBackendAPI:
 
     @staticmethod
     def _extract_quota_and_restore_at(limits_progress: list[Any]) -> tuple[int, str | None, bool]:
+        # For Free tier, we don't want file_upload=0 to globally mark the account as limited
+        # because they can still chat. So we will only consider image_gen for the primary 'quota'
+        # if available, or just keep it unknown. The individual limits are still preserved in limits_progress.
+        quota = 99999
+        restore_at = None
+        image_quota_unknown = True
+        
         for item in limits_progress:
-            if isinstance(item, dict) and item.get("feature_name") == "image_gen":
-                return int(item.get("remaining") or 0), str(item.get("reset_after") or "") or None, False
-        return 0, None, True
+            if not isinstance(item, dict):
+                continue
+            feature = item.get("feature_name")
+            # Only use image_gen to determine the overall numeric "quota" for backward compatibility.
+            # file_upload limits are tracked independently in the frontend.
+            if feature == "image_gen":
+                image_quota_unknown = False
+                rem = int(item.get("remaining") or 0)
+                reset = str(item.get("reset_after") or "") or None
+                if rem < quota:
+                    quota = rem
+                    restore_at = reset
+            elif feature == "file_upload":
+                # file_upload is tracked but we don't let it brick the whole account's "quota"
+                pass
+                    
+        if quota == 99999:
+            return 0, None, True
+        return quota, restore_at, image_quota_unknown
 
     def _get_me(self) -> Dict[str, Any]:
         path = "/backend-api/me"
@@ -223,7 +246,7 @@ class OpenAIBackendAPI:
             "limits_progress": limits_progress,
             "default_model_slug": init_payload.get("default_model_slug"),
             "restore_at": restore_at,
-            "status": "active" if image_quota_unknown and plan_type.lower() != "free" else ("limited" if quota == 0 else "active"),
+            "status": "active" if plan_type.lower() == "free" else ("limited" if quota == 0 else "active"),
         }
         logger.debug({
             "event": "backend_user_info_result",
@@ -303,6 +326,22 @@ class OpenAIBackendAPI:
         from services.protocol.conversation import _file_upload_store, _FILE_UPLOAD_MARKER
 
         conversation_messages = []
+
+        # chatgpt.com native conversation API only supports a SINGLE system message.
+        # When multiple system messages are present (e.g. HA instructions + search results),
+        # merge them into one combined system message placed first.
+        system_parts = [str(item.get("content", "")) for item in messages if item.get("role") == "system"]
+        non_system = [item for item in messages if item.get("role") != "system"]
+        if system_parts:
+            merged_system = "\n\n---\n\n".join(p for p in system_parts if p.strip())
+            if merged_system.strip():
+                conversation_messages.append({
+                    "id": new_uuid(),
+                    "author": {"role": "system"},
+                    "content": {"content_type": "text", "parts": [merged_system]},
+                })
+        messages = non_system
+
         for item in messages:
             role = item.get("role", "user")
             content = item.get("content", "")
@@ -498,7 +537,17 @@ class OpenAIBackendAPI:
             },
         }
         if tools:
-            payload["tools"] = tools
+            from services.protocol.conversation import _slim_tool_schema
+            import copy
+            slim_tools = []
+            for t in tools:
+                if "function" in t and "parameters" in t["function"]:
+                    t2 = copy.deepcopy(t)
+                    t2["function"]["parameters"] = _slim_tool_schema(t2["function"]["parameters"])
+                    slim_tools.append(t2)
+                else:
+                    slim_tools.append(t)
+            payload["tools"] = slim_tools
         if tool_choice is not None:
             payload["tool_choice"] = tool_choice
         return payload

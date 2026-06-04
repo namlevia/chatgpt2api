@@ -72,3 +72,22 @@ jobs:
           # cache key bug. With this off each build is ~1m slower but the
           # image actually contains the committed code.
           no-cache: true
+
+  deploy:
+    needs: docker
+    runs-on: ubuntu-latest
+    # Only deploy on main branch pushes (not tags/PRs)
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Deploy to server via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.DEPLOY_HOST }}
+          username: root
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: 22
+          # Timeout generous enough for docker pull + healthcheck loop (12×5s = 60s)
+          command_timeout: 10m
+          script: |
+            bash /opt/chatgpt2api/deploy.sh

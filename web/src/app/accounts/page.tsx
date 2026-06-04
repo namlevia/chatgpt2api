@@ -934,7 +934,7 @@ function AccountsPageContent() {
                         
                         const featureRanks: Record<string, Record<string, number>> = {};
                         group.items?.forEach((acc: any) => {
-                          if (acc.status !== 'active') return;
+                          if (acc.status === 'disabled' || acc.status === 'error') return;
                           
                           const igRemaining = Math.max(0, acc.quota || 0);
                           if (igRemaining > 0) {
@@ -992,15 +992,20 @@ function AccountsPageContent() {
                               // backend until it 429s). 1-indexed for humans.
                               const ordinal = accountIdx + 1;
                               
-                              const topFeatures: string[] = [];
-                              if (featureRanks['image_gen']?.[account.access_token] === 1) topFeatures.push("Ảnh");
+                              const featureBadges: string[] = [];
+                              const hasLimitsImageGen = account.limits_progress?.some((lp: any) => lp.feature_name === 'image_gen');
+                              
+                              const igRank = featureRanks['image_gen']?.[account.access_token];
+                              if (!hasLimitsImageGen && igRank === 1) {
+                                featureBadges.push(`Tạo ảnh #1`);
+                              }
                               account.limits_progress?.forEach((lp: any) => {
                                 const rank = featureRanks[lp.feature_name]?.[account.access_token];
                                 if (rank === 1) {
-                                  topFeatures.push(t(lp.feature_name as TranslationKey) ?? lp.feature_name);
+                                  featureBadges.push(`${t(lp.feature_name as TranslationKey) ?? lp.feature_name} #1`);
                                 }
                               });
-                              const uniqueTop = Array.from(new Set(topFeatures));
+                              const uniqueFeatureBadges = Array.from(new Set(featureBadges));
 
                               const exhausted: string[] = [];
                               account.limits_progress?.forEach((lp: any) => {
@@ -1008,8 +1013,8 @@ function AccountsPageContent() {
                                   exhausted.push(t(lp.feature_name as TranslationKey) ?? lp.feature_name);
                                 }
                               });
-                              if (!isUnlimited && !imageQuotaUnknown(account) && quotaVal <= 0) {
-                                exhausted.push("Ảnh");
+                              if (!hasLimitsImageGen && !isUnlimited && !imageQuotaUnknown(account) && quotaVal <= 0) {
+                                exhausted.push("Tạo ảnh");
                               }
                               const uniqueExhausted = Array.from(new Set(exhausted));
 
@@ -1059,11 +1064,11 @@ function AccountsPageContent() {
                                             </Badge>
                                           ) : null}
                                         </div>
-                                        {(uniqueTop.length > 0 || uniqueExhausted.length > 0) && (
+                                        {(uniqueFeatureBadges.length > 0 || uniqueExhausted.length > 0) && (
                                           <div className="flex flex-wrap items-center gap-1">
-                                            {uniqueTop.map(f => (
+                                            {uniqueFeatureBadges.map(f => (
                                               <Badge key={`top-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-indigo-50 text-indigo-600 border border-indigo-100 font-medium">
-                                                {f} #1
+                                                {f}
                                               </Badge>
                                             ))}
                                             {uniqueExhausted.map(f => (
@@ -1126,9 +1131,9 @@ function AccountsPageContent() {
                                             </div>
                                           </div>
                                           {isUnlimited ? (
-                                            <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-violet-500" /><span className="text-[11px] text-slate-500">Ảnh:</span><span className="text-[12px] font-bold text-violet-600">∞ không giới hạn</span></div>
-                                          ) : !imageQuotaUnknown(account) ? (
-                                            <QuotaBar label="Ảnh" remaining={quotaVal} resetAfter={account.restore_at ? formatRestoreAt(account.restore_at, lang).relative : undefined} ordinal={featureRanks['image_gen']?.[account.access_token]} />
+                                            <div className="flex items-center gap-1.5"><span className="size-2 rounded-full bg-violet-500" /><span className="text-[11px] text-slate-500">Tạo ảnh:</span><span className="text-[12px] font-bold text-violet-600">∞ không giới hạn</span></div>
+                                          ) : (!hasLimitsImageGen && !imageQuotaUnknown(account)) ? (
+                                            <QuotaBar label="Tạo ảnh" remaining={quotaVal} resetAfter={account.restore_at ? formatRestoreAt(account.restore_at, lang).relative : undefined} ordinal={featureRanks['image_gen']?.[account.access_token]} />
                                           ) : null}
                                           {account.limits_progress?.map((lp, i) => (
                                             <QuotaBar key={i} label={t(lp.feature_name as TranslationKey) ?? lp.feature_name ?? `Limit ${i + 1}`} remaining={lp.remaining ?? 0} total={(lp as any).total} resetAfter={lp.reset_after ? formatRestoreAt(lp.reset_after, lang).relative : undefined} ordinal={featureRanks[lp.feature_name]?.[account.access_token]} />

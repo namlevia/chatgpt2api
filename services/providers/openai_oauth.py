@@ -434,7 +434,7 @@ class CodexOAuthProvider:
                                         ).isoformat()
                             except Exception:
                                 pass
-                        updates = {"status": "limited"}
+                        updates = {"status": "limited", "quota": 0}
                         if restore_iso:
                             updates["restore_at"] = restore_iso
                         account_service.update_account(access_token, updates)

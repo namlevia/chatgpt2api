@@ -301,6 +301,7 @@ class AccountService:
         self,
         excluded_tokens: set[str] | None = None,
         account_type: str | None = None,
+        requires_image: bool = False,
     ) -> str:
         """Priority-FIFO selection. Optionally filter to one account type.
 
@@ -330,8 +331,47 @@ class AccountService:
                 token = account.get("access_token") or ""
                 if not token or token in excluded:
                     continue
+                if requires_image:
+                    # Skip if we know file_upload/image_gen is 0
+                    limits = account.get("limits_progress")
+                    if isinstance(limits, list):
+                        has_zero_quota = False
+                        for lp in limits:
+                            if lp.get("feature_name") in ("file_upload", "image_gen") and int(lp.get("remaining") or 0) <= 0:
+                                has_zero_quota = True
+                                break
+                        if has_zero_quota:
+                            continue
+                    # Skip if recently failed image upload (e.g. within 6 hours)
+                    last_fail = account.get("last_image_failed_at")
+                    if last_fail:
+                        try:
+                            from datetime import datetime
+                            fail_dt = datetime.strptime(last_fail, "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - fail_dt).total_seconds() < 6 * 3600:
+                                continue
+                        except Exception:
+                            pass
                 return token
             return ""
+
+    def mark_image_failed(self, access_token: str) -> None:
+        """Mark that this account failed an image upload (e.g. reached file limit)
+        so we can skip it for future image requests, but keep it at #1 for text requests.
+        """
+        if not access_token:
+            return
+        with self._lock:
+            current = self._accounts.get(access_token)
+            if current is None:
+                return
+            next_item = dict(current)
+            from datetime import datetime
+            next_item["last_image_failed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            account = self._normalize_account(next_item)
+            if account is not None:
+                self._accounts[access_token] = account
+            self._save_accounts()
 
     def mark_text_used(self, access_token: str) -> None:
         if not access_token:
