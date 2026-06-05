@@ -791,19 +791,32 @@ async def _run(session: LoginSession, password: str) -> None:
 
         session.state = "running"
         session.message = "Mở trang accounts.google.com (qua trang chủ Google)..."
+        navigated = False
         try:
             await page.goto("https://www.google.com/", wait_until="domcontentloaded", timeout=30_000)
             await asyncio.sleep(2.0)
-            for _g_sel in ('a[href^="https://accounts.google.com/ServiceLogin"]', 'a:has-text("Sign in")', 'a:has-text("Đăng nhập")'):
+            
+            clicked = await page.evaluate("""() => {
+                const links = document.querySelectorAll('a');
+                for (const a of links) {
+                    if (a.href && a.href.includes('accounts.google.com/ServiceLogin')) {
+                        a.click();
+                        return true;
+                    }
+                }
+                return false;
+            }""")
+            
+            if clicked:
                 try:
-                    loc = page.locator(_g_sel).first
-                    if await loc.count() > 0:
-                        await loc.click(timeout=3000)
-                        break
+                    await page.wait_for_url("**/accounts.google.com/**", timeout=10000)
+                    navigated = True
                 except Exception:
-                    continue
-            await asyncio.sleep(3.5)
+                    pass
         except Exception:
+            pass
+            
+        if not navigated:
             await page.goto(_GOOGLE_SIGNIN_URL, wait_until="domcontentloaded", timeout=30_000)
 
         ok = await do_google_login_steps(session, page, ctx, password)

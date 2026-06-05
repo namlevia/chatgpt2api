@@ -1537,26 +1537,41 @@ async def _run_onboard_v2(session, password: str) -> None:
             else:
                 session.state = "running"
                 session.message = "Mo accounts.google.com (qua trang chu Google de tranh block)..."
+                navigated = False
                 try:
                     await page.goto("https://www.google.com/", wait_until="domcontentloaded", timeout=30_000)
                     await asyncio.sleep(2.0)
-                    # Click Sign in on Google homepage
-                    for _g_sel in ('a[href^="https://accounts.google.com/ServiceLogin"]', 'a:has-text("Sign in")', 'a:has-text("Đăng nhập")'):
+                    
+                    # Force click via JS to bypass the 'Make Chrome your own' overlay
+                    clicked = await page.evaluate("""() => {
+                        const links = document.querySelectorAll('a');
+                        for (const a of links) {
+                            if (a.href && a.href.includes('accounts.google.com/ServiceLogin')) {
+                                a.click();
+                                return true;
+                            }
+                        }
+                        return false;
+                    }""")
+                    
+                    if clicked:
                         try:
-                            loc = page.locator(_g_sel).first
-                            if await loc.count() > 0:
-                                await loc.click(timeout=3000)
-                                break
+                            await page.wait_for_url("**/accounts.google.com/**", timeout=10000)
+                            navigated = True
                         except Exception:
-                            continue
-                except Exception:
+                            pass
+                except Exception as exc:
+                    logger.warning("onboard_v2: google.com trick failed: %s", exc)
+                
+                if not navigated:
                     # Fallback to direct
                     try:
                         await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en",
                                         wait_until="domcontentloaded", timeout=30_000)
                     except Exception:
                         await page.goto("https://accounts.google.com/", wait_until="domcontentloaded", timeout=30_000)
-                await asyncio.sleep(3.5)
+                
+                await asyncio.sleep(2.0)
                 ok = await do_google_login_steps(session, page, ctx, password,
                                                  prefer_method=session.prefer_method or "auth")
                 if not ok:
