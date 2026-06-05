@@ -365,6 +365,8 @@ class BrowserPool:
                     "--disable-features=TranslateUI,BlinkGenPropertyTrees",
                     "--disable-dev-shm-usage",
                     "--disable-popup-blocking",
+                    "--disk-cache-size=1048576",
+                    "--media-cache-size=1048576",
                 ],
             )
         elif browser == "firefox":
@@ -402,6 +404,8 @@ class BrowserPool:
                     "--disable-blink-features=AutomationControlled",
                     "--disable-dev-shm-usage",
                     "--disable-popup-blocking",
+                    "--disk-cache-size=1048576",
+                    "--media-cache-size=1048576",
                 ],
                 ignore_default_args=["--enable-automation"],
                 channel="chrome",
