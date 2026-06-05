@@ -675,14 +675,9 @@ function AccountsPageContent() {
           <AccountImportDialog
             disabled={isLoading || isRefreshing || isDeleting}
             onImported={(items) => {
-              const oldTokens = new Set(accounts.map((a) => a.access_token));
-              const newTokens = items.filter((a) => !oldTokens.has(a.access_token)).map((a) => a.access_token);
               setAccounts(items);
               setSelectedIds([]);
               setPage(1);
-              if (newTokens.length > 0) {
-                void handleRefreshAccounts(newTokens);
-              }
             }}
           />
           <a
