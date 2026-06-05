@@ -678,10 +678,11 @@ function AccountsPageContent() {
               const oldTokens = new Set(accounts.map((a) => a.access_token));
               const newTokens = items.filter((a) => !oldTokens.has(a.access_token)).map((a) => a.access_token);
               setAccounts(items);
-              if (newTokens.length > 0) {
-                setSelectedIds((prev) => Array.from(new Set([...prev, ...newTokens])));
-              }
+              setSelectedIds([]);
               setPage(1);
+              if (newTokens.length > 0) {
+                void handleRefreshAccounts(newTokens);
+              }
             }}
           />
           <a
