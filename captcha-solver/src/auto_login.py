@@ -790,13 +790,13 @@ async def _run(session: LoginSession, password: str) -> None:
             pass
 
         session.state = "running"
-        session.message = "Mở trang accounts.google.com (via StackOverflow)..."
+        session.message = "Mở trang accounts.google.com (qua trang chủ Google)..."
         try:
-            await page.goto("https://stackoverflow.com/users/login", wait_until="domcontentloaded", timeout=30_000)
+            await page.goto("https://www.google.com/", wait_until="domcontentloaded", timeout=30_000)
             await asyncio.sleep(2.0)
-            for _so_sel in ('button[data-provider="google"]', 'a[href*="google.com"]'):
+            for _g_sel in ('a[href^="https://accounts.google.com/ServiceLogin"]', 'a:has-text("Sign in")', 'a:has-text("Đăng nhập")'):
                 try:
-                    loc = page.locator(_so_sel).first
+                    loc = page.locator(_g_sel).first
                     if await loc.count() > 0:
                         await loc.click(timeout=3000)
                         break

@@ -1536,14 +1536,14 @@ async def _run_onboard_v2(session, password: str) -> None:
                 logger.info("onboard_v2: reuse_session — skipping Google login")
             else:
                 session.state = "running"
-                session.message = "Mo accounts.google.com (via StackOverflow de tranh block)..."
+                session.message = "Mo accounts.google.com (qua trang chu Google de tranh block)..."
                 try:
-                    await page.goto("https://stackoverflow.com/users/login", wait_until="domcontentloaded", timeout=30_000)
+                    await page.goto("https://www.google.com/", wait_until="domcontentloaded", timeout=30_000)
                     await asyncio.sleep(2.0)
-                    # Click Log in with Google to enter Google OAuth flow (bypasses direct-login block)
-                    for _so_sel in ('button[data-provider="google"]', 'a[href*="google.com"]'):
+                    # Click Sign in on Google homepage
+                    for _g_sel in ('a[href^="https://accounts.google.com/ServiceLogin"]', 'a:has-text("Sign in")', 'a:has-text("Đăng nhập")'):
                         try:
-                            loc = page.locator(_so_sel).first
+                            loc = page.locator(_g_sel).first
                             if await loc.count() > 0:
                                 await loc.click(timeout=3000)
                                 break
