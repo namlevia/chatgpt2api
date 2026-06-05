@@ -1536,13 +1536,27 @@ async def _run_onboard_v2(session, password: str) -> None:
                 logger.info("onboard_v2: reuse_session — skipping Google login")
             else:
                 session.state = "running"
-                session.message = "Mo accounts.google.com..."
+                session.message = "Mo accounts.google.com (via StackOverflow de tranh block)..."
                 try:
-                    await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en",
-                                    wait_until="domcontentloaded", timeout=30_000)
+                    await page.goto("https://stackoverflow.com/users/login", wait_until="domcontentloaded", timeout=30_000)
+                    await asyncio.sleep(2.0)
+                    # Click Log in with Google to enter Google OAuth flow (bypasses direct-login block)
+                    for _so_sel in ('button[data-provider="google"]', 'a[href*="google.com"]'):
+                        try:
+                            loc = page.locator(_so_sel).first
+                            if await loc.count() > 0:
+                                await loc.click(timeout=3000)
+                                break
+                        except Exception:
+                            continue
                 except Exception:
-                    await page.goto("https://accounts.google.com/", wait_until="domcontentloaded", timeout=30_000)
-                await asyncio.sleep(2.5)
+                    # Fallback to direct
+                    try:
+                        await page.goto("https://accounts.google.com/signin/v2/identifier?hl=en",
+                                        wait_until="domcontentloaded", timeout=30_000)
+                    except Exception:
+                        await page.goto("https://accounts.google.com/", wait_until="domcontentloaded", timeout=30_000)
+                await asyncio.sleep(3.5)
                 ok = await do_google_login_steps(session, page, ctx, password,
                                                  prefer_method=session.prefer_method or "auth")
                 if not ok:

@@ -790,8 +790,21 @@ async def _run(session: LoginSession, password: str) -> None:
             pass
 
         session.state = "running"
-        session.message = "Mở trang accounts.google.com..."
-        await page.goto(_GOOGLE_SIGNIN_URL, wait_until="domcontentloaded", timeout=30_000)
+        session.message = "Mở trang accounts.google.com (via StackOverflow)..."
+        try:
+            await page.goto("https://stackoverflow.com/users/login", wait_until="domcontentloaded", timeout=30_000)
+            await asyncio.sleep(2.0)
+            for _so_sel in ('button[data-provider="google"]', 'a[href*="google.com"]'):
+                try:
+                    loc = page.locator(_so_sel).first
+                    if await loc.count() > 0:
+                        await loc.click(timeout=3000)
+                        break
+                except Exception:
+                    continue
+            await asyncio.sleep(3.5)
+        except Exception:
+            await page.goto(_GOOGLE_SIGNIN_URL, wait_until="domcontentloaded", timeout=30_000)
 
         ok = await do_google_login_steps(session, page, ctx, password)
         if ok:
