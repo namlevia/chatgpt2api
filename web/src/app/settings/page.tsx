@@ -16,6 +16,7 @@ import { CustomProvidersCard } from "./components/custom-providers-card";
 import { FlowCard } from "./components/flow-card";
 import { ChatGPTOnboardCard } from "./components/chatgpt-onboard-card";
 import { ChatGPTWebCard } from "./components/chatgpt-web-card";
+import { GeminiWebCard } from "./components/gemini-web-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
@@ -118,6 +119,14 @@ function SettingsPageContent() {
           icon={<MessageCircle className="size-5" />}
         >
           <ChatGPTWebCard />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Gemini Web (Google OAuth)"
+          description="Login gemini.google.com qua tài khoản Google → DOM scrape chat/vision. Dùng chung browser profile google-<localpart> với ChatGPT/Flow — onboard 1-click hoặc Tái dùng."
+          icon={<span className="text-lg">♊</span>}
+        >
+          <GeminiWebCard />
         </SettingsSection>
 
         <SettingsSection

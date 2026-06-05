@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LoaderCircle, RefreshCw } from "lucide-react";
+import { LoaderCircle, RefreshCw, Trash2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 
 type CSCfg = { url: string; apiKey: string };
@@ -76,6 +77,34 @@ export function ReuseProfilePicker({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cs.url, cs.apiKey]);
 
+  // Delete the browser SESSION (user-data-dir) of the selected profile. This is
+  // the only place a session is removed deliberately — it logs the Google
+  // account out of EVERY provider sharing the profile, but never touches the
+  // saved-credential vault or any provider's pool entry.
+  async function deleteSession() {
+    if (!selected || !cs.url) return;
+    const ok = window.confirm(
+      `Xóa session "${selected}"?\n\n` +
+      `Tài khoản Google này sẽ bị ĐĂNG XUẤT khỏi MỌI provider dùng chung profile ` +
+      `(ChatGPT / Flow / Gemini Web). KHÔNG xóa credential đã lưu — vẫn onboard lại được.`,
+    );
+    if (!ok) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`${cs.url}/v1/profiles/${encodeURIComponent(selected)}`, {
+        method: "DELETE",
+        headers: { Authorization: `Bearer ${cs.apiKey}` },
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      toast.success(`Đã xóa session ${selected}`);
+      await load();
+    } catch (e: any) {
+      toast.error(`Xóa session lỗi: ${e?.message || e}`);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
     <div className="flex items-center gap-2">
       <select
@@ -118,6 +147,17 @@ export function ReuseProfilePicker({
       >
         {busy ? <LoaderCircle className="mr-1 h-4 w-4 animate-spin" /> : null}
         Tái dùng
+      </Button>
+      <Button
+        type="button"
+        variant="outline"
+        size="icon"
+        onClick={() => void deleteSession()}
+        disabled={busy || loading || !selected}
+        title="Xóa session (đăng xuất Google khỏi MỌI provider dùng profile này — không xóa credential đã lưu)"
+        className="border-rose-200 text-rose-500 hover:bg-rose-50 hover:text-rose-600"
+      >
+        <Trash2 className="h-4 w-4" />
       </Button>
     </div>
   );
