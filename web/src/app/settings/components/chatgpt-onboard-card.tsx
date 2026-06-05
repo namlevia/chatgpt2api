@@ -200,7 +200,13 @@ export function ChatGPTOnboardCard() {
             });
           } catch { /* tag update is best-effort */ }
           toast.success(`Đã thêm account ${label} vào pool`);
-          setDraft({ email: "", password: "", code: "", totpSecret: "" });
+          
+          // Auto-select the account instead of clearing the form
+          const emailToSelect = s.captured_email || draft.email;
+          if (emailToSelect) {
+            setSelectedAccount(emailToSelect);
+          }
+          setSavedRefreshKey((k) => k + 1);
         } catch (e: any) {
           toast.error(`Add to pool fail: ${e?.message || e}`);
         } finally {
@@ -248,6 +254,11 @@ export function ChatGPTOnboardCard() {
             });
           } catch { /* tag best-effort */ }
           toast.success(`Đã thêm ${label} vào pool (tái dùng)`);
+          
+          if (s.captured_email) {
+            setSelectedAccount(s.captured_email);
+          }
+          setSavedRefreshKey((k) => k + 1);
         } catch (e: any) {
           toast.error(`Add to pool fail: ${e?.message || e}`);
         } finally {
