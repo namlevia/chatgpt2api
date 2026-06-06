@@ -150,6 +150,7 @@ def handle_free_chat(
                 or "hit your limit" in err_msg
                 or "reached the limit" in err_msg
                 or "reached your limit" in err_msg
+                or "advanced data analysis" in err_msg
                 or ("limit" in err_msg and requires_image)
             )
             is_payload_too_large = (
@@ -268,11 +269,41 @@ def _try_free_with_token(
     if _is_status_only_query(user_text):
         tools = None
 
-    if stream:
+    from services.protocol.openai_v1_chat_complete import _messages_have_images
+    force_sync_for_vision = _messages_have_images(messages)
+
+    if stream and not force_sync_for_vision:
         gen = stream_text_chat_completion(backend, messages, model, tools, tool_choice)
         return _prefetch_stream(gen, "chatgpt.com backend stream failed — token may be invalid")
     request = ConversationRequest(model=model, messages=messages, tools=tools, tool_choice=tool_choice)
     content = collect_text(backend, request)
+    
+    if "advanced data analysis right now" in content or "can’t do more advanced data analysis" in content:
+        raise RuntimeError(f"quota exceeded (advanced data analysis): {content}")
+        
+    if stream and force_sync_for_vision:
+        from services.protocol.openai_v1_chat_complete import _extract_xml_tool_calls_from_text, completion_chunk
+        import time, uuid
+        def _simulated_stream():
+            completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+            created = int(time.time())
+            clean_content = content
+            tool_calls = None
+            if tools:
+                tool_calls = _extract_xml_tool_calls_from_text(content)
+                if tool_calls:
+                    import re
+                    clean_content = re.sub(r"```xml\s*<tool_call[^`]*```", "", content, flags=re.DOTALL).strip()
+            
+            yield completion_chunk(model, {"role": "assistant", "content": clean_content}, None, completion_id, created)
+            if tool_calls:
+                tc_delta = [{"index": i, "id": tc.get("id", f"tc_{i}"), "type": "function", "function": tc.get("function", {})} for i, tc in enumerate(tool_calls)]
+                yield completion_chunk(model, {"tool_calls": tc_delta}, None, completion_id, created)
+                yield completion_chunk(model, {}, "tool_calls", completion_id, created)
+            else:
+                yield completion_chunk(model, {}, "stop", completion_id, created)
+        return _simulated_stream()
+
     
     if tools:
         from services.protocol.openai_v1_chat_complete import _extract_xml_tool_calls_from_text
