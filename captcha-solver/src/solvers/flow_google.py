@@ -675,6 +675,24 @@ async def generate_image(
                 pass
             await asyncio.sleep(0.3)
             try:
+                await page.evaluate("""
+                    () => {
+                        const ces = Array.from(document.querySelectorAll('[contenteditable=true]'));
+                        const target = ces
+                            .map(e => ({e, w: e.offsetWidth, h: e.offsetHeight}))
+                            .filter(x => x.w > 200 && x.h > 0)
+                            .sort((a, b) => (b.w * b.h) - (a.w * a.h))[0];
+                        if (target) {
+                            target.e.focus();
+                            const sel = window.getSelection();
+                            const range = document.createRange();
+                            range.selectNodeContents(target.e);
+                            range.collapse(false);
+                            sel.removeAllRanges();
+                            sel.addRange(range);
+                        }
+                    }
+                """)
                 await page.locator("[contenteditable='true']").first.click(timeout=5000)
             except Exception:
                 pass
@@ -715,10 +733,10 @@ async def generate_image(
         # until one passes or the budget runs out. We stop launching new
         # attempts once too little time remains for a winning attempt (~45s to
         # generate) so a success is never cut off mid-flight.
-        _budget = max(60, timeout - 15)   # seconds for the whole retry phase
+        _budget = max(90, timeout - 15)   # seconds for the whole retry phase
         _deadline = started + _budget
-        _GEN_RESERVE = 62                 # retry re-nav (~15s) + a successful POST (~45s)
-        _per_try = 55
+        _GEN_RESERVE = 85                 # retry re-nav (~15s) + a successful POST (~60s)
+        _per_try = 80
         response = None
         last_err = ""
         _attempt = 0
