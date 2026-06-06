@@ -1,5 +1,7 @@
 [🇺🇸 English](README_ChatGPT2API.md) | [🇻🇳 Tiếng Việt](README_ChatGPT2API.vi.md)
 
+**[🔙 Back to Main README](README.md)**
+
 # 📖 ChatGPT2API User & Configuration Guide
 
 This document provides detailed instructions on how to add ChatGPT accounts to the system and master each Tab on the Docker **ChatGPT2API** Dashboard.

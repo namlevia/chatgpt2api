@@ -1,5 +1,7 @@
 [🇺🇸 English](README_VN_MCP_HUB.md) | [🇻🇳 Tiếng Việt](README_VN_MCP_HUB.vi.md)
 
+**[🔙 Quay lại Trang Chủ (Main README)](README.vi.md)**
+
 # 📖 Hướng Dẫn Sử Dụng & Cấu Hình VN MCP Hub
 
 Tài liệu này hướng dẫn chi tiết cách cấu hình Docker **VN MCP Hub** để mở rộng bộ não cho AI (Search, RAG, Công cụ).

@@ -1,5 +1,7 @@
 [🇺🇸 English](README_VN_MCP_HUB.md) | [🇻🇳 Tiếng Việt](README_VN_MCP_HUB.vi.md)
 
+**[🔙 Back to Main README](README.md)**
+
 # 📖 VN MCP Hub User & Configuration Guide
 
 This document provides detailed instructions on how to configure the **VN MCP Hub** Docker container to expand the AI's capabilities (Search, RAG, Tools).

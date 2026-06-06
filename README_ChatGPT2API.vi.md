@@ -1,5 +1,7 @@
 [🇺🇸 English](README_ChatGPT2API.md) | [🇻🇳 Tiếng Việt](README_ChatGPT2API.vi.md)
 
+**[🔙 Quay lại Trang Chủ (Main README)](README.vi.md)**
+
 # 📖 Hướng Dẫn Sử Dụng & Đăng Nhập ChatGPT2API
 
 Tài liệu này hướng dẫn chi tiết các cách thêm tài khoản ChatGPT vào hệ thống và cách làm chủ từng Tab trên giao diện quản trị (Dashboard) của Docker **ChatGPT2API**.

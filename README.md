@@ -2,6 +2,10 @@
 
 # 🚀 ChatGPT2API - Ultimate AI Gateway & VN MCP Hub
 
+**📚 Documentation Links (Click to view details):**
+- **[📖 ChatGPT2API User & Login Guide](README_ChatGPT2API.md)**
+- **[🧠 VN MCP Hub RAG & Configuration Guide](README_VN_MCP_HUB.md)**
+
 **ChatGPT2API** is a comprehensive project that transforms your ChatGPT Web account into a standard OpenAI API, while acting as a powerful **AI Agent Backend**. This version is specially optimized for smart home systems like **Home Assistant** (filtering formats so TTS smart speakers can read 100% naturally), and is perfect for **Open WebUI**, **n8n**, and any application supporting the OpenAI API standard.
 
 Included is the **VN MCP Hub (Model Context Protocol Hub)** - providing 20+ custom MCP servers to expand your AI's brain with web search, weather updates, news, finance, law, and RAG (Knowledge Base) capabilities.
