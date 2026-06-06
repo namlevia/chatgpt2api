@@ -238,10 +238,10 @@ class BrowserPool:
                 to_evict = []
                 async with self._global_lock:
                     for profile, entry in list(self._contexts.items()):
-                        # Warm-pool: keep tabs alive 30 min idle (was 10 min).
+                        # Warm-pool: keep tabs alive 5 min idle (was 30 min).
                         # The prewarmer re-warms every 25 min so a healthy
                         # warmed profile never sees this branch.
-                        if now - entry.last_used > 1800:
+                        if now - entry.last_used > 300:
                             lock = self._locks.get(profile)
                             if lock and not lock.locked():
                                 to_evict.append(profile)
@@ -250,7 +250,7 @@ class BrowserPool:
                     if not lock.locked():
                         async with lock:
                             entry = self._contexts.get(profile)
-                            if entry and now - entry.last_used > 1800:
+                            if entry and now - entry.last_used > 300:
                                 logger.info("auto-evicting idle profile=%s", profile)
                                 await self._evict(profile)
             except asyncio.CancelledError:
