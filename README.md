@@ -1,57 +1,79 @@
+[🇺🇸 English](README.md) | [🇻🇳 Tiếng Việt](README.vi.md)
+
 # 🚀 ChatGPT2API - Ultimate AI Gateway & VN MCP Hub
 
-**ChatGPT2API** là dự án toàn diện cho phép biến tài khoản ChatGPT Web của bạn thành một API chuẩn OpenAI, đồng thời đóng vai trò là một **AI Agent Backend** mạnh mẽ. Phiên bản này được thiết kế tối ưu hóa đặc biệt cho các hệ thống nhà thông minh như **Home Assistant** (đặc biệt là lọc sạch định dạng để Loa thông minh TTS có thể đọc tự nhiên 100%), cũng như hoàn hảo cho **Open WebUI**, **n8n** và bất kỳ ứng dụng nào hỗ trợ chuẩn OpenAI API.
+**ChatGPT2API** is a comprehensive project that transforms your ChatGPT Web account into a standard OpenAI API, while acting as a powerful **AI Agent Backend**. This version is specially optimized for smart home systems like **Home Assistant** (filtering formats so TTS smart speakers can read 100% naturally), and is perfect for **Open WebUI**, **n8n**, and any application supporting the OpenAI API standard.
 
-Kèm theo đó là **VN MCP Hub (Model Context Protocol Hub)** - Cung cấp hơn 20+ custom MCP servers giúp mở rộng bộ não AI của bạn với khả năng tìm kiếm web (Search), cập nhật thời tiết, tin tức, tài chính, luật pháp và hệ thống RAG (Knowledge Base).
+Included is the **VN MCP Hub (Model Context Protocol Hub)** - providing 20+ custom MCP servers to expand your AI's brain with web search, weather updates, news, finance, law, and RAG (Knowledge Base) capabilities.
+
+The project also comes with a **Captcha Solver** to handle Cloudflare barriers and protect automated logins.
 
 ---
 
-## 🌟 Tính Năng Nổi Bật
+## 🌟 Key Features
 
 ### 🧠 Core ChatGPT2API
-- **10+ AI Provider**: Hỗ trợ ChatGPT Web (Free/Plus), Codex OAuth, OpenCode (Free không cần tài khoản), Gemini (Free AI Studio), DeepSeek, Groq, Mistral, NVIDIA NIM, v.v.
-- **Model Combo Orchestration**: Cơ chế tự động chuyển đổi (fallback) thông minh. Nếu API A lỗi, tự động chuyển sang API B mà không làm gián đoạn trải nghiệm người dùng.
-- **Tối ưu hóa Loa Thông Minh (TTS)**: Bộ lọc RTK thông minh tự động loại bỏ các định dạng Markdown (`#`, `*`, `-`) giúp giọng nói mượt mà, tự nhiên.
-- **Web Dashboard**: Giao diện quản lý trực quan cho phép thêm tài khoản, cấu hình model, theo dõi token và backup dễ dàng.
-- **RTK Token Optimizer**: Thuật toán tiết kiệm 60-90% lượng token tiêu thụ mà vẫn giữ nguyên chất lượng câu trả lời.
+- **10+ AI Providers**: Supports ChatGPT Web (Free/Plus), Codex OAuth, OpenCode (Free without account), Gemini (Free AI Studio), DeepSeek, Groq, Mistral, NVIDIA NIM, etc.
+- **Model Combo Orchestration**: Smart automatic fallback mechanism. If API A fails, it automatically switches to API B without disrupting the user experience.
+- **Smart Speaker (TTS) Optimization**: Smart RTK filter automatically removes Markdown formats (`#`, `*`, `-`) for a smooth, natural voice.
+- **Web Dashboard**: Intuitive management interface allowing easy account addition, model configuration, token tracking, and backup.
+- **RTK Token Optimizer**: An algorithm that saves 60-90% of token consumption while maintaining the quality of answers.
 
 ### 🔌 VN MCP Hub
-- **8 MCP VN Core**: Tích hợp sẵn Thời tiết (4 nguồn), Tin tức (6 nguồn), Tỷ giá/Vàng, Lịch Âm, Tìm kiếm DuckDuckGo, Tra cứu Luật, Phạt nguội, Chứng khoán.
-- **7 Knowledge Base RAG**: Dữ liệu điện nước, y tế sơ cứu, giáo dục, ngoại ngữ, khoa học, tự nhiên và xã hội Việt Nam.
-- **Federated Multi-Search**: 9 Search engines quốc tế chạy song song (Brave, Mojeek, PubMed, v.v.).
-- **Studio UI**: Quản lý trực quan, tạo KB (Knowledge Base) mới từ Markdown, lưu trữ R2 Cloudflare.
+- **8 Core MCPs**: Built-in Weather (4 sources), News (6 sources), Exchange Rates/Gold, Lunar Calendar, DuckDuckGo Search, Vietnam Law Lookup, Traffic Fines, Stocks.
+- **7 Knowledge Base RAGs**: Vietnam's electricity/water, medical first aid, education, foreign languages, science, nature, and society data.
+- **Federated Multi-Search**: 9 international search engines running in parallel (Brave, Mojeek, PubMed, etc.).
+- **Studio UI**: Intuitive management, creating new KBs (Knowledge Base) from Markdown, Cloudflare R2 storage.
+
+### 🛡️ Captcha Solver
+- **Bypass Cloudflare/Turnstile**: Automatically handles ChatGPT's captcha protection.
+- **VNC/API Management**: Supports visual debugging via port 6080.
 
 ---
 
-## 💻 Yêu Cầu Hệ Thống
+## 💻 System Requirements
 
-| Thành Phần | Tối Thiểu | Khuyến Nghị |
+| Component | Minimum | Recommended |
 | :--- | :--- | :--- |
-| **Hệ Điều Hành** | Linux (Ubuntu/Debian), Raspberry Pi OS, Synology/QNAP | Linux (Ubuntu/Debian) |
-| **RAM** | 2GB | 4GB+ (Khuyến nghị nếu chạy kèm Chroma DB của MCP Hub) |
-| **Disk** | 5GB | 20GB+ (Dành cho lưu trữ RAG và Cache) |
-| **Phần Mềm** | Docker & Docker Compose | Phiên bản Docker mới nhất (24.0+) |
+| **OS** | Linux (Ubuntu/Debian), Raspberry Pi OS, Synology/QNAP | Linux (Ubuntu/Debian) |
+| **RAM** | 2GB | 4GB+ (Recommended if running all 3 containers) |
+| **Disk** | 5GB | 20GB+ (For RAG and Cache storage) |
+| **Software** | Docker & Docker Compose | Latest Docker version (24.0+) |
 
 ---
 
-## 🚀 Hướng Dẫn Cài Đặt Chi Tiết
+## 🚀 Step-by-Step Installation Guide
 
-Dưới đây là hướng dẫn cài đặt từ dễ đến chuyên sâu trên nhiều nền tảng.
+Below is a detailed installation guide from basic to advanced on multiple platforms.
 
-### Cách 1: Cài Đặt Nhanh Bằng Docker Compose (Khuyên dùng)
+### Environment Preparation
+Before you begin, your server needs to have Docker and Docker Compose installed.
+- **Install Docker on Linux (Ubuntu/Debian):**
+  ```bash
+  curl -fsSL https://get.docker.com -o get-docker.sh
+  sudo sh get-docker.sh
+  ```
 
-Cách này sẽ cài đặt đồng thời **ChatGPT2API** và **VN MCP Hub** để bạn có một hệ thống hoàn chỉnh.
+### Method 1: Quick Install via Docker Compose (Recommended)
 
-1. Khởi tạo thư mục và file cấu hình:
+This method will install all 3 systems simultaneously: **ChatGPT2API**, **VN MCP Hub**, and **Captcha Solver**.
+
+**Step 1: Initialize directory**
+Create a directory to store the configuration and data for the application:
 ```bash
 mkdir -p /opt/chatgpt2api
 cd /opt/chatgpt2api
 ```
 
-2. Tạo file `docker-compose.yml` với nội dung sau:
+**Step 2: Create docker-compose.yml file**
+Use the `nano` editor to create the file:
+```bash
+nano docker-compose.yml
+```
+Paste the following code into the file:
 ```yaml
 services:
-  # Cốt lõi xử lý API
+  # 1. Core API processor (Main Backend)
   chatgpt2api:
     image: ghcr.io/tritue2011/chatgpt2api:latest
     container_name: chatgpt2api
@@ -61,10 +83,10 @@ services:
     volumes:
       - ./chatgpt2api-data:/app/data
     environment:
-      - CHATGPT2API_AUTH_KEY=mat_khau_cua_ban # ĐỔI MẬT KHẨU NÀY
+      - CHATGPT2API_AUTH_KEY=your_secure_password # CHANGE THIS PASSWORD
       - STORAGE_BACKEND=json
 
-  # Hub mở rộng tính năng AI
+  # 2. AI expansion hub (Tools, Web Search, RAG)
   vn-mcp-hub:
     image: ghcr.io/tritue2011/vn-mcp-hub:latest
     container_name: vn-mcp-hub
@@ -74,167 +96,185 @@ services:
     volumes:
       - ./vn_mcp_chroma:/app/chroma_db
       - ./vn_mcp_data:/app/data
-```
 
-3. Chạy hệ thống:
+  # 3. Captcha Solver (Bypassing Cloudflare barriers)
+  captcha-solver:
+    image: ghcr.io/tritue2011/captcha-solver:latest
+    container_name: captcha-solver
+    restart: unless-stopped
+    ports:
+      - "6080:6080" # VNC web interface debug port
+      - "8010:8010" # Decryption API communication port
+    volumes:
+      - ./captcha-solver-data:/data
+    environment:
+      - CAPTCHA_SOLVER_API_KEY=your_secure_password # CHANGE THIS PASSWORD
+```
+Save the file by pressing `Ctrl + X`, then press `Y` and `Enter`.
+
+**Step 3: Start the system**
+Run the following command to download the image and start the containers:
 ```bash
 docker compose up -d
 ```
+Once complete, you can access the admin dashboard at `http://[SERVER_IP]:3000`.
 
-### Cách 2: Cài Đặt Qua Portainer
+### Method 2: Installation via Portainer
 
-1. Truy cập Portainer -> **Stacks** -> **Add stack**.
-2. Đặt tên stack là `chatgpt-ai-system`.
-3. Trong phần Web editor, dán đoạn mã `docker-compose.yml` phía trên vào.
-4. Chỉnh sửa `CHATGPT2API_AUTH_KEY` thành mật khẩu bảo mật của bạn.
-5. Cuộn xuống và bấm **Deploy the stack**.
-
----
-
-## 🎛️ Đào Sâu Dashboard ChatGPT2API (Hướng Dẫn Chi Tiết Từng Tab)
-
-Sau khi cài đặt xong, bạn truy cập vào trang quản trị tại `http://[IP_MÁY_CHỦ]:3000` và đăng nhập bằng mật khẩu (Auth Key). Giao diện bên tay trái sẽ gồm các Tab chính, đây là cách làm chủ từng mục:
-
-### 1. Tab Overview (Tổng Quan)
-- **Công dụng**: Bảng điều khiển trung tâm theo dõi sức khỏe hệ thống theo thời gian thực.
-- **Tính năng**:
-  - Xem số lượng Requests đang hoạt động, tỷ lệ Success Rate (Thành công/Lỗi).
-  - Biểu đồ thống kê số lượng Token đã tiết kiệm được nhờ thuật toán Optimizer.
-  - Theo dõi nhanh số tài khoản đang "Sống" (Active) hay "Chết" (Error).
-
-### 2. Tab Account Pool (Kho Tài Khoản ChatGPT)
-- **Công dụng**: Nơi quản lý các tài khoản ChatGPT Web miễn phí và trả phí (Plus/Pro).
-- **Cách lấy Access Token an toàn**:
-  1. Mở trình duyệt ẩn danh (Incognito), đăng nhập [chatgpt.com](https://chatgpt.com).
-  2. Dán link `https://chatgpt.com/api/auth/session` vào thanh địa chỉ.
-  3. Copy chuỗi rất dài nằm sau chữ `"accessToken":`. (Chú ý: Đóng cửa sổ, KHÔNG BẤM ĐĂNG XUẤT).
-- **Cách sử dụng Tab**:
-  - Bấm **Import Access Token**.
-  - Dán token của bạn vào (mỗi token một dòng). Bấm Xác nhận.
-  - Hệ thống tự động phân loại đây là tài khoản Free hay Plus. Bạn có thể bật/tắt (Toggle) từng tài khoản. Nếu bị báo màu đỏ, nghĩa là Token đã hết hạn, bạn cần xóa và nạp lại.
-
-### 3. Tab Providers (Nhà Cung Cấp Bên Thứ 3)
-- **Công dụng**: Dùng khi bạn không muốn phụ thuộc hoàn toàn vào ChatGPT mà muốn dùng thêm Gemini, DeepSeek, Groq.
-- **Cách sử dụng**:
-  - Bấm chọn nhà cung cấp (Ví dụ: **Gemini AI Studio**).
-  - Dán API Key lấy từ trang của Google vào ô trống.
-  - Bấm **Save**. Bây giờ hệ thống đã sẵn sàng dùng các Model của bên thứ 3 bằng prefix tương ứng (như `gemini_free/auto`).
-
-### 4. Tab Combos (Định Tuyến & Fallback Thông Minh - Quan Trọng Nhất)
-- **Công dụng**: Tạo ra một luồng xử lý thông minh để AI không bao giờ bị "đơ" nếu một nguồn bị lỗi.
-- **Cách cấu hình "Bất Tử"**:
-  1. Bấm **Create Combo**. Đặt tên dễ nhớ: `AI Agent`.
-  2. Tại phần Fallback Chain, thêm theo thứ tự từ xịn đến dự phòng:
-     - Dòng 1: `cx/auto` (Codex OAuth - xịn nhất nếu bạn có).
-     - Dòng 2: `chatgpt/auto` (Tài khoản ChatGPT thường).
-     - Dòng 3: `gemini_free/auto` (Google Gemini API dự phòng 1).
-     - Dòng 4: `oc/auto` (OpenCode - Dự phòng cuối cùng không cần token).
-  3. **Cơ chế**: Khi bạn gọi model `AI Agent`, hệ thống thử `cx/auto`. Nếu lỗi 429 hoặc rớt mạng, nó lập tức trong chưa tới 1 giây chuyển sang `chatgpt/auto`, cứ thế để đảm bảo luôn có kết quả trả về cho Loa thông minh.
-
-### 5. Tab Models (Quản Lý Model)
-- **Công dụng**: Hiển thị/Ẩn các model khả dụng để các ứng dụng như n8n, OpenWebUI quét được.
-- **Cách sử dụng**: Bạn có thể bật (tích xanh) hoặc tắt (bỏ chọn) bất kỳ model nào bạn không muốn xuất hiện trong API `/v1/models`. Nếu bạn dùng Codex, hãy đảm bảo chọn đúng tên (như `cx/gpt-4o`).
-
-### 6. Tab MCP Servers (Công Cụ Mở Rộng AI)
-- **Công dụng**: Gắn thêm "Tay chân", "Mắt mũi" cho AI (giúp AI biết Search Google, xem thời tiết, đọc tin tức).
-- **Cách kết nối với VN MCP Hub**:
-  1. Mục **MCP Hub URL**: Điền `http://[IP_MÁY_CHỦ]:8005` (hoặc `http://vn-mcp-hub:8005` nếu chạy chung compose).
-  2. Hệ thống sẽ tự quét ra các "Preset" như: Thời tiết, Chứng khoán, Pháp luật.
-  3. Bấm **Install/Bật** các công cụ bạn thích. Khi kích hoạt, AI Agent tự động có khả năng gọi tool mỗi khi có người dùng hỏi.
-
-### 7. Tab Backup / System
-- **Công dụng**: Sao lưu cấu hình và tài khoản phòng khi chuyển máy chủ.
-- **Cách dùng**: 
-  - **Export**: Xuất ra file JSON toàn bộ API Key, Access Token.
-  - **Import 9router Backup**: Hỗ trợ nhập file backup từ hệ thống 9router chuyên dụng cũ trực tiếp vào.
+If you use Portainer to manage Docker:
+1. Log into Portainer, select your environment (Local/Primary).
+2. Go to the **Stacks** section in the left menu -> Click **Add stack**.
+3. Name the stack `chatgpt-ai-system`.
+4. In the Web editor section, paste the `docker-compose.yml` code from above.
+5. Make sure to edit `CHATGPT2API_AUTH_KEY` to your own secure password.
+6. Scroll to the bottom and click **Deploy the stack**. Wait 1-2 minutes for the system to download and launch.
 
 ---
 
-## 🧠 Đào Sâu Giao Diện VN MCP Hub Studio (Cơ Sở Dữ Liệu RAG)
+## 🎛️ Deep Dive into ChatGPT2API Dashboard
 
-Truy cập trang `http://[IP_MÁY_CHỦ]:8005/studio` để mở giao diện kiểm soát trí nhớ và công cụ của AI.
+After installation, access the admin page at `http://[SERVER_IP]:3000` and log in with your password (Auth Key). The left-hand interface consists of main tabs. Here's how to master each one:
 
-### 1. Tab Knowledge Base (Trí Nhớ Cục Bộ - RAG)
-- **Khái niệm**: RAG (Retrieval-Augmented Generation) là kho kiến thức bạn tự dạy cho AI.
-- **Cách sử dụng**:
-  - Tại đây có sẵn các kho: Điện nước, Sơ cứu y tế, Luật.
-  - Bạn có thể bấm **Create New KB**, dán nội dung (copy & paste) từ tài liệu công ty hoặc hướng dẫn gia đình (dưới dạng văn bản hoặc Markdown) vào ô nội dung. Hub sẽ tự động băm nhỏ (chunking) và nhét vào Chroma DB. AI sau này sẽ tự ưu tiên tìm trong kho này trước khi tra Google.
+### 1. Overview Tab
+- **Purpose**: Central dashboard monitoring system health in real-time.
+- **Features**:
+  - View active Requests, Success Rate.
+  - Statistical chart of Tokens saved thanks to the Optimizer algorithm.
+  - Quick tracking of "Active" or "Error" accounts.
 
-### 2. Tab Multi-Search (Cấu Hình Tìm Kiếm)
-- **Công dụng**: Chọn các Search Engine quốc tế để AI quét dữ liệu thời gian thực.
-- **Cách sử dụng**: Bật/tắt các nguồn: DuckDuckGo (Mặc định ngon nhất), Brave Search (Cần dán API Key), Wikipedia. Nếu RAG cục bộ không có đáp án, Hub sẽ âm thầm gọi Search.
+### 2. Account Pool Tab
+- **Purpose**: Manage free and paid (Plus/Pro) ChatGPT Web accounts.
+- **How to safely get an Access Token**:
+  1. Open an Incognito browser window, log in to [chatgpt.com](https://chatgpt.com).
+  2. Paste `https://chatgpt.com/api/auth/session` into the address bar.
+  3. Copy the very long string after `"accessToken":`. (Note: Close the window, DO NOT LOG OUT).
+- **How to use this Tab**:
+  - Click **Import Access Token**.
+  - Paste your tokens (one token per line). Click Confirm.
+  - The system automatically classifies it as Free or Plus. You can toggle each account. If it turns red, the Token has expired; delete and re-import.
 
-### 3. Tab Cloud Storage (Đồng Bộ Đám Mây)
-- **Công dụng**: Nếu ổ cứng máy chủ hỏng, bạn sẽ mất công sức dạy AI. Tab này dùng Cloudflare R2 (hoặc AWS S3) để sao lưu.
-- **Cách cấu hình**: Nhập Endpoint URL, Access Key, Secret Key của bucket R2. Bật chế độ tự động đồng bộ (Auto Sync) lúc 2h sáng.
+### 3. Providers Tab
+- **Purpose**: Use when you don't want to rely entirely on ChatGPT and want to use Gemini, DeepSeek, Groq.
+- **How to use**:
+  - Select the provider (e.g., **Gemini AI Studio**).
+  - Paste the API Key obtained from Google into the blank field.
+  - Click **Save**. The system is now ready to use third-party Models with the corresponding prefix (like `gemini_free/auto`).
+
+### 4. Combos Tab (Smart Routing & Fallback - Most Important)
+- **Purpose**: Create a smart processing flow so the AI never "freezes" if one source fails.
+- **How to configure "Immortality"**:
+  1. Click **Create Combo**. Give it a memorable name: `AI Agent`.
+  2. In the Fallback Chain section, add in order from best to backup:
+     - Line 1: `cx/auto` (Codex OAuth - best if you have it).
+     - Line 2: `chatgpt/auto` (Regular ChatGPT account).
+     - Line 3: `gemini_free/auto` (Google Gemini API backup 1).
+     - Line 4: `oc/auto` (OpenCode - Final backup requiring no token).
+  3. **Mechanism**: When you call the `AI Agent` model, the system tries `cx/auto`. If it hits a 429 error or network drop, it instantly (under 1 second) switches to `chatgpt/auto`, ensuring a response is always returned to the Smart Speaker.
+
+### 5. Models Tab
+- **Purpose**: Show/Hide available models so applications like n8n, OpenWebUI can scan them.
+- **How to use**: You can enable (green check) or disable any model you don't want to appear in the `/v1/models` API. If using Codex, ensure you select the exact Prefix name (like `cx/gpt-4o`).
+
+### 6. MCP Servers Tab (AI Expansion Tools)
+- **Purpose**: Attach "Hands and feet", "Eyes and nose" to the AI (allowing the AI to Google Search, check weather, read news).
+- **How to connect with VN MCP Hub**:
+  1. **MCP Hub URL**: Enter `http://[SERVER_IP]:8005` (or `http://vn-mcp-hub:8005` if running in the same compose).
+  2. The system will automatically scan "Presets" like: Weather, Stocks, Law.
+  3. Click **Install/Enable** the tools you like. When activated, the AI Agent automatically has the ability to call tools whenever a user asks.
+
+### 7. Backup / System Tab
+- **Purpose**: Backup configurations and accounts in case of server migration.
+- **How to use**: 
+  - **Export**: Exports a JSON file of all API Keys, Access Tokens.
+  - **Import 9router Backup**: Supports importing backup files from the old specialized 9router system directly.
 
 ---
 
-## 🏠 Hướng Dẫn Tích Hợp Chi Tiết (Home Assistant, n8n, WebUI)
+## 🧠 Deep Dive into VN MCP Hub Studio (RAG Database)
 
-### 1. Tích Hợp Vào Home Assistant (Làm Trợ Lý Ảo)
+Access `http://[SERVER_IP]:8005/studio` to open the AI's memory and tool control interface.
 
-1. Trong Home Assistant, vào **Settings** -> **Devices & Services** -> **Add Integration**.
-2. Tìm kiếm **OpenAI Conversation**.
-3. Điền cấu hình:
-   - **API Key**: `mat_khau_cua_ban` (Biến CHATGPT2API_AUTH_KEY).
-   - **Base URL**: `http://[IP_MÁY_CHỦ_CHATGPT2API]:3000/v1`
-4. Bấm **Submit**. 
-5. Bấm nút **Configure** trên Integration vừa thêm, chọn model là `AI Agent` (Tên Combo bạn đã tạo ở Tab Combos).
+### 1. Knowledge Base Tab (Local Memory - RAG)
+- **Concept**: RAG (Retrieval-Augmented Generation) is the knowledge repository you teach the AI.
+- **How to use**:
+  - Pre-built repositories are available: Electricity/Water, Medical First Aid, Law.
+  - You can click **Create New KB**, paste content (copy & paste) from company documents or family guides (as text or Markdown) into the content box. The Hub will automatically chunk and insert it into Chroma DB. The AI will later prioritize searching this repository before Googling.
 
-#### 🔊 Tối Ưu Hóa Giọng Nói (TTS) Cho Loa Thông Minh
-Mở **Settings** -> **Voice Assistants** -> Chọn trợ lý của bạn. Ở phần **Instructions (Chỉ thị)**, dán đoạn sau để AI trả lời tự nhiên nhất:
+### 2. Multi-Search Tab
+- **Purpose**: Select international Search Engines for the AI to scan real-time data.
+- **How to use**: Enable/disable sources: DuckDuckGo (Best default), Brave Search (Requires API Key), Wikipedia. If local RAG has no answer, the Hub will silently call Search.
 
-> *"Bạn là trợ lý ảo nhà thông minh. Hãy trả lời cực kỳ ngắn gọn, tự nhiên và giống văn nói của con người để hệ thống TTS có thể đọc mượt mà. Tuyệt đối KHÔNG sử dụng các ký tự định dạng (như dấu sao *, dấu thăng #, gạch đầu dòng -). Không dùng danh sách liệt kê, hạn chế tối đa ngoặc đơn. Trả lời thẳng vào trọng tâm câu hỏi. QUAN TRỌNG: Ngay cả khi lấy dữ liệu từ Web Search hoặc MCP, tuyệt đối không được dùng định dạng liệt kê."*
-
-### 2. Tích Hợp Open WebUI
-1. Mở Admin Panel -> **Settings** -> **Connections** -> **OpenAI API**.
-2. Bật công tắc kích hoạt.
-3. **URL**: `http://[IP_MÁY_CHỦ_CHATGPT2API]:3000/v1`
-4. **Key**: `mat_khau_cua_ban`
-5. Bấm biểu tượng Refresh để nạp danh sách Model.
-
-### 3. Tích Hợp n8n
-1. Kéo node **OpenAI Chat Model**.
-2. Ở phần **Credential**, tạo mới OpenAI API.
-3. Điền Base URL (dưới phần Override): `http://[IP_MÁY_CHỦ_CHATGPT2API]:3000/v1`
-4. Điền API Key.
+### 3. Cloud Storage Tab
+- **Purpose**: If the server hard drive fails, you lose the effort of teaching the AI. This tab uses Cloudflare R2 (or AWS S3) for backup.
+- **Configuration**: Enter Endpoint URL, Access Key, Secret Key of the R2 bucket. Enable Auto Sync at 2 AM.
 
 ---
 
-## 🛠️ Danh Sách API Endpoints & Model Prefix
+## 🏠 Detailed Integration Guide (Home Assistant, n8n, WebUI)
+
+### 1. Integration into Home Assistant (As a Virtual Assistant)
+
+1. In Home Assistant, go to **Settings** -> **Devices & Services** -> **Add Integration**.
+2. Search for **OpenAI Conversation**.
+3. Fill in the configuration:
+   - **API Key**: `your_secure_password` (The CHATGPT2API_AUTH_KEY variable).
+   - **Base URL**: `http://[SERVER_IP_CHATGPT2API]:3000/v1`
+4. Click **Submit**. 
+5. Click the **Configure** button on the newly added Integration, select the model as `AI Agent` (The Combo Name you created in the Combos Tab).
+
+#### 🔊 Voice Optimization (TTS) for Smart Speakers
+Open **Settings** -> **Voice Assistants** -> Select your assistant. In the **Instructions** section, paste the following so the AI answers most naturally:
+
+> *"You are a smart home virtual assistant. Please answer extremely concisely, naturally, and like human spoken language so the TTS system can read smoothly. Absolutely DO NOT use formatting characters (like asterisks *, hashes #, bullet points -). Do not use lists, minimize parentheses. Answer straight to the point of the question. IMPORTANT: Even when retrieving data from Web Search or MCP, absolutely do not use list formats."*
+
+### 2. Integration with Open WebUI
+1. Open Admin Panel -> **Settings** -> **Connections** -> **OpenAI API**.
+2. Turn on the activation switch.
+3. **URL**: `http://[SERVER_IP_CHATGPT2API]:3000/v1`
+4. **Key**: `your_secure_password`
+5. Click the Refresh icon to load the Model list.
+
+### 3. Integration with n8n
+1. Drag the **OpenAI Chat Model** node.
+2. In the **Credential** section, create a new OpenAI API.
+3. Fill in the Base URL (under Override): `http://[SERVER_IP_CHATGPT2API]:3000/v1`
+4. Fill in the API Key.
+
+---
+
+## 🛠️ API Endpoints & Model Prefix List
 
 ### Model Prefix
-| Prefix | Nguồn cung cấp (Provider) | Ghi chú |
+| Prefix | Provider | Note |
 | :--- | :--- | :--- |
-| `cx/` | Codex OAuth | Dành cho ChatGPT Pro/Plus, tự động lấy token mới. |
-| `chatgpt/` | ChatGPT Web | Dành cho tài khoản Free. |
-| `oc/` | OpenCode | Nguồn phụ miễn phí, không cần đăng nhập. |
-| `gemini_free/` | Gemini AI Studio | Cần nhập API Key từ Google (Miễn phí). |
-| `custom:...` | Custom Provider | Bất kỳ API nào hỗ trợ chuẩn OpenAI. |
+| `cx/` | Codex OAuth | For ChatGPT Pro/Plus, automatically gets new tokens. |
+| `chatgpt/` | ChatGPT Web | For Free accounts. |
+| `oc/` | OpenCode | Free secondary source, no login required. |
+| `gemini_free/` | Gemini AI Studio | Requires Google API Key (Free). |
+| `custom:...` | Custom Provider | Any API supporting the OpenAI standard. |
 
 ---
 
-## 🚨 Khắc Phục Sự Cố (Troubleshooting)
+## 🚨 Troubleshooting
 
-| Tình Trạng | Nguyên Nhân & Cách Xử Lý |
+| Condition | Cause & Solution |
 | :--- | :--- |
-| **Container tự thoát liên tục (Crash loop)** | Xem log bằng lệnh: `docker logs chatgpt2api`. Thường do nhập sai cú pháp biến môi trường. |
-| **Trợ lý trả lời có mã `#`, `*` đọc khó nghe** | Kiểm tra lại System Prompt trong Home Assistant. Chắc chắn đã thêm đoạn hướng dẫn không dùng định dạng. |
-| **Báo lỗi 400 "Model not supported"** | Bạn đang dùng model không tồn tại. Vào Tab Combos/Models kiểm tra xem model có đúng định dạng Prefix không (VD: `chatgpt/auto`). |
-| **Tài khoản ChatGPT bị Expired liên tục** | Do bạn bấm nút Log Out ở trình duyệt lúc lấy Token. Cách xử lý: Lấy lại Token mới từ Tab ẩn danh và đóng cửa sổ lại, KHÔNG Log Out. |
-| **MCP Tools không phản hồi hoặc báo rỗng** | Kiểm tra URL MCP Server ở Tab MCP Servers. Test thử bằng lệnh: `curl http://[IP]:8005/health`. |
-| **Ổ cứng đầy (Out of disk)** | Do log hoặc cache docker (đặc biệt là Chroma DB) cũ. Chạy lệnh: `docker system prune -af` |
+| **Container keeps crashing (Crash loop)** | View logs with: `docker logs chatgpt2api`. Usually due to incorrect environment variable syntax. |
+| **Assistant answers with `#`, `*` making it hard to hear** | Recheck the System Prompt in Home Assistant. Make sure you added the instruction not to use formatting. |
+| **Error 400 "Model not supported"** | You are using a non-existent model. Go to Combos/Models Tab to check if the model has the correct Prefix format (e.g., `chatgpt/auto`). |
+| **ChatGPT account keeps Expiring** | Because you clicked Log Out in the browser when getting the Token. Solution: Get a new Token from an Incognito tab and close the window, DO NOT Log Out. |
+| **MCP Tools not responding or empty** | Check the MCP Server URL in the MCP Servers Tab. Test with the command: `curl http://[IP]:8005/health`. |
+| **Out of disk** | Due to old docker logs or cache (especially Chroma DB). Run command: `docker system prune -af` |
 
 ---
 
-## 🔄 Cập Nhật Phiên Bản Mới
+## 🔄 Updating to a New Version
 
-Khi có bản cập nhật từ nhà phát triển, bạn không cần xóa dữ liệu. Chỉ cần chạy:
+When there is an update from the developer, you do not need to delete data. Just run:
 
 ```bash
 cd /opt/chatgpt2api
 docker compose pull
 docker compose up -d
 ```
-Hệ thống sẽ tự động cập nhật image, mọi cấu hình tài khoản hay RAG của bạn đều được giữ nguyên 100%.
+The system will automatically update the image; all your account configurations or RAGs are kept 100% intact.

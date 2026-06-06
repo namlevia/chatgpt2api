@@ -1,84 +1,220 @@
-# Hướng Dẫn Cài Đặt & Sử Dụng ChatGPT2API Cho Home Assistant
+[🇺🇸 English](README.md) | [🇻🇳 Tiếng Việt](README.vi.md)
 
-ChatGPT2API là dự án cho phép biến tài khoản ChatGPT Web của bạn thành một API chuẩn OpenAI. Phiên bản này đã được tùy chỉnh đặc biệt để lọc sạch các ký tự định dạng (Markdown, dấu gạch ngang, tiêu đề...) nhằm tương thích hoàn hảo 100% với hệ thống giọng nói (Text-To-Speech) của loa thông minh như Phicomm R1 qua Home Assistant.
+# 🚀 ChatGPT2API - Ultimate AI Gateway & VN MCP Hub
+
+**ChatGPT2API** là dự án toàn diện cho phép biến tài khoản ChatGPT Web của bạn thành một API chuẩn OpenAI, đồng thời đóng vai trò là một **AI Agent Backend** mạnh mẽ. Phiên bản này được thiết kế tối ưu hóa đặc biệt cho các hệ thống nhà thông minh như **Home Assistant** (đặc biệt là lọc sạch định dạng để Loa thông minh TTS có thể đọc tự nhiên 100%), cũng như hoàn hảo cho **Open WebUI**, **n8n** và bất kỳ ứng dụng nào hỗ trợ chuẩn OpenAI API.
+
+Kèm theo đó là **VN MCP Hub (Model Context Protocol Hub)** - Cung cấp hơn 20+ custom MCP servers giúp mở rộng bộ não AI của bạn với khả năng tìm kiếm web (Search), cập nhật thời tiết, tin tức, tài chính, luật pháp và hệ thống RAG (Knowledge Base).
+
+Dự án còn đi kèm **Captcha Solver** giúp giải quyết các rào cản từ Cloudflare và bảo vệ đăng nhập tự động.
 
 ---
 
-## 1. Cài Đặt Hệ Thống (Bằng Docker)
+## 🌟 Tính Năng Nổi Bật
 
-Yêu cầu máy chủ (Ubuntu/Debian, Raspberry Pi, Debian trên Home Assistant...) đã cài đặt sẵn `docker` và `docker-compose`.
+### 🧠 Core ChatGPT2API
+- **10+ AI Provider**: Hỗ trợ ChatGPT Web (Free/Plus), Codex OAuth, OpenCode (Free không cần tài khoản), Gemini (Free AI Studio), DeepSeek, Groq, Mistral, NVIDIA NIM, v.v.
+- **Model Combo Orchestration**: Cơ chế tự động chuyển đổi (fallback) thông minh. Nếu API A lỗi, tự động chuyển sang API B mà không làm gián đoạn trải nghiệm người dùng.
+- **Tối ưu hóa Loa Thông Minh (TTS)**: Bộ lọc RTK thông minh tự động loại bỏ các định dạng Markdown (`#`, `*`, `-`) giúp giọng nói mượt mà, tự nhiên.
+- **Web Dashboard**: Giao diện quản lý trực quan cho phép thêm tài khoản, cấu hình model, theo dõi token và backup dễ dàng.
+- **RTK Token Optimizer**: Thuật toán tiết kiệm 60-90% lượng token tiêu thụ mà vẫn giữ nguyên chất lượng câu trả lời.
 
+### 🔌 VN MCP Hub
+- **8 MCP VN Core**: Tích hợp sẵn Thời tiết (4 nguồn), Tin tức (6 nguồn), Tỷ giá/Vàng, Lịch Âm, Tìm kiếm DuckDuckGo, Tra cứu Luật, Phạt nguội, Chứng khoán.
+- **7 Knowledge Base RAG**: Dữ liệu điện nước, y tế sơ cứu, giáo dục, ngoại ngữ, khoa học, tự nhiên và xã hội Việt Nam.
+- **Federated Multi-Search**: 9 Search engines quốc tế chạy song song (Brave, Mojeek, PubMed, v.v.).
+- **Studio UI**: Quản lý trực quan, tạo KB (Knowledge Base) mới từ Markdown, lưu trữ R2 Cloudflare.
+
+### 🛡️ Captcha Solver
+- **Vượt Cloudflare/Turnstile**: Tự động xử lý Captcha bảo vệ của ChatGPT.
+- **Quản lý VNC/API**: Hỗ trợ debug giao diện trực quan qua cổng 6080.
+
+---
+
+## 💻 Yêu Cầu Hệ Thống
+
+| Thành Phần | Tối Thiểu | Khuyến Nghị |
+| :--- | :--- | :--- |
+| **Hệ Điều Hành** | Linux (Ubuntu/Debian), Raspberry Pi OS, Synology/QNAP | Linux (Ubuntu/Debian) |
+| **RAM** | 2GB | 4GB+ (Khuyến nghị nếu chạy cả 3 container) |
+| **Disk** | 5GB | 20GB+ (Dành cho lưu trữ RAG và Cache) |
+| **Phần Mềm** | Docker & Docker Compose | Phiên bản Docker mới nhất (24.0+) |
+
+---
+
+## 🚀 Hướng Dẫn Cài Đặt Chi Tiết Từng Bước
+
+Dưới đây là hướng dẫn cài đặt từ cơ bản đến chuyên sâu. Hệ thống gồm **3 Docker Container** hoạt động cùng nhau để tạo nên sức mạnh hoàn chỉnh.
+
+### Chuẩn Bị Môi Trường
+Trước khi bắt đầu, máy chủ của bạn cần được cài đặt sẵn Docker và Docker Compose.
+- **Cài đặt Docker trên Linux (Ubuntu/Debian):**
+  ```bash
+  curl -fsSL https://get.docker.com -o get-docker.sh
+  sudo sh get-docker.sh
+  ```
+
+### Cách 1: Cài Đặt Bằng Docker Compose (Khuyên dùng)
+
+Cách này sẽ cài đặt đồng thời cả 3 hệ thống: **ChatGPT2API**, **VN MCP Hub** và **Captcha Solver**.
+
+**Bước 1: Khởi tạo thư mục**
+Tạo thư mục chứa cấu hình và dữ liệu cho ứng dụng:
 ```bash
-# Clone source code
-git clone https://github.com/TriTue2011/chatgpt2api.git
-cd chatgpt2api
-
-# Khởi chạy hệ thống (tự động build)
-docker-compose up -d --build
+mkdir -p /opt/chatgpt2api
+cd /opt/chatgpt2api
 ```
 
-Sau khi chạy xong, hệ thống sẽ mở 2 cổng:
-- Web Quản lý: `http://[IP_MÁY_CHỦ]:3000`
-- API Endpoint: `http://[IP_MÁY_CHỦ]:3000/v1`
+**Bước 2: Tạo file cấu hình docker-compose.yml**
+Sử dụng trình soạn thảo `nano` để tạo file:
+```bash
+nano docker-compose.yml
+```
+Dán đoạn mã sau vào file:
+```yaml
+services:
+  # 1. Cốt lõi xử lý API (Main Backend)
+  chatgpt2api:
+    image: ghcr.io/tritue2011/chatgpt2api:latest
+    container_name: chatgpt2api
+    restart: unless-stopped
+    ports:
+      - "3000:80"
+    volumes:
+      - ./chatgpt2api-data:/app/data
+    environment:
+      - CHATGPT2API_AUTH_KEY=mat_khau_cua_ban # ĐỔI MẬT KHẨU NÀY
+      - STORAGE_BACKEND=json
+
+  # 2. Hub mở rộng tính năng AI (Công cụ, Web Search, RAG)
+  vn-mcp-hub:
+    image: ghcr.io/tritue2011/vn-mcp-hub:latest
+    container_name: vn-mcp-hub
+    restart: unless-stopped
+    ports:
+      - "8005:8005"
+    volumes:
+      - ./vn_mcp_chroma:/app/chroma_db
+      - ./vn_mcp_data:/app/data
+
+  # 3. Trình giải mã Captcha (Vượt rào cản Cloudflare)
+  captcha-solver:
+    image: ghcr.io/tritue2011/captcha-solver:latest
+    container_name: captcha-solver
+    restart: unless-stopped
+    ports:
+      - "6080:6080" # Cổng debug giao diện web VNC
+      - "8010:8010" # Cổng giao tiếp API giải mã
+    volumes:
+      - ./captcha-solver-data:/data
+    environment:
+      - CAPTCHA_SOLVER_API_KEY=mat_khau_cua_ban # ĐỔI MẬT KHẨU NÀY
+```
+Lưu lại bằng cách nhấn `Ctrl + X`, sau đó nhấn `Y` và `Enter`.
+
+**Bước 3: Khởi động hệ thống**
+Chạy lệnh sau để tải image và khởi động các container:
+```bash
+docker compose up -d
+```
+Sau khi hoàn tất, bạn có thể truy cập trang quản trị chính tại `http://[IP_MÁY_CHỦ]:3000`.
+
+### Cách 2: Cài Đặt Qua Giao Diện Portainer
+
+Nếu bạn sử dụng Portainer để quản lý Docker:
+1. Đăng nhập vào Portainer, chọn môi trường (Local/Primary).
+2. Chuyển đến mục **Stacks** ở menu bên trái -> Bấm **Add stack**.
+3. Đặt tên stack là `chatgpt-ai-system`.
+4. Trong phần Web editor, dán đoạn mã `docker-compose.yml` phía trên vào.
+5. Chú ý chỉnh sửa `CHATGPT2API_AUTH_KEY` và `CAPTCHA_SOLVER_API_KEY` thành mật khẩu bảo mật của riêng bạn.
+6. Cuộn xuống dưới cùng và bấm **Deploy the stack**. Chờ khoảng 1-2 phút để hệ thống tải về và khởi chạy.
 
 ---
 
-## 2. Cách Lấy Access Token / Session Của ChatGPT
+## 🎛️ Đào Sâu Dashboard ChatGPT2API (Hướng Dẫn Chi Tiết Từng Tab)
 
-Để hệ thống hoạt động, bạn cần cấp cho nó tài khoản ChatGPT. Cách an toàn và đơn giản nhất là lấy `access_token` từ trình duyệt:
+Sau khi cài đặt xong, bạn truy cập vào trang quản trị tại `http://[IP_MÁY_CHỦ]:3000` và đăng nhập bằng mật khẩu (Auth Key). Giao diện bên tay trái sẽ gồm các Tab chính, đây là cách làm chủ từng mục:
 
-1. Mở trình duyệt ẩn danh (Incognito) và đăng nhập vào trang [chatgpt.com](https://chatgpt.com).
-2. Sau khi đăng nhập thành công, mở tab mới và dán đường link này vào thanh địa chỉ:
-   `https://chatgpt.com/api/auth/session`
-3. Trình duyệt sẽ hiển thị một đoạn mã JSON. Bạn tìm chuỗi bắt đầu bằng `eyJhbG...` nằm sau chữ `"accessToken":`.
-4. Copy toàn bộ chuỗi Access Token đó (nó rất dài).
+### 1. Tab Overview (Tổng Quan)
+- **Công dụng**: Bảng điều khiển trung tâm theo dõi sức khỏe hệ thống theo thời gian thực.
+- **Tính năng**: Xem số lượng Requests, Success Rate, và thống kê Token tiết kiệm được.
 
-*Lưu ý: Không đăng xuất (Log out) ChatGPT trên trình duyệt đó, nếu không token sẽ bị hủy.*
+### 2. Tab Account Pool (Kho Tài Khoản ChatGPT)
+- **Công dụng**: Quản lý các tài khoản ChatGPT Web miễn phí và trả phí (Plus/Pro).
+- **Cách lấy Access Token an toàn**:
+  1. Mở trình duyệt ẩn danh (Incognito), đăng nhập [chatgpt.com](https://chatgpt.com).
+  2. Dán link `https://chatgpt.com/api/auth/session` vào thanh địa chỉ.
+  3. Copy chuỗi rất dài nằm sau chữ `"accessToken":`. (Chú ý: Đóng cửa sổ, KHÔNG BẤM ĐĂNG XUẤT).
+- **Cách sử dụng**: Bấm **Import Access Token** và dán token vào. Hệ thống tự động kiểm tra token sống hay chết.
 
----
+### 3. Tab Providers (Nhà Cung Cấp Bên Thứ 3)
+- **Công dụng**: Thêm API của Gemini, DeepSeek, Groq.
+- **Cách sử dụng**: Chọn nhà cung cấp, dán API Key lấy từ Google/Deepseek vào ô trống và **Save**.
 
-## 3. Cách Gán Tài Khoản Vào ChatGPT2API
+### 4. Tab Combos (Định Tuyến & Fallback Thông Minh - Quan Trọng Nhất)
+- **Công dụng**: Tạo ra một luồng xử lý thông minh để AI không bao giờ bị "đơ" nếu một nguồn bị lỗi.
+- **Cách cấu hình "Bất Tử"**:
+  1. Bấm **Create Combo**. Đặt tên: `AI Agent`.
+  2. Tại phần Fallback Chain, thêm theo thứ tự từ xịn đến dự phòng: `cx/auto` -> `chatgpt/auto` -> `gemini_free/auto` -> `oc/auto`.
+  3. Hệ thống sẽ tự động quét lỗi 429 và ngay lập tức chuyển nguồn dự phòng chưa tới 1 giây.
 
-1. Truy cập vào Web UI quản lý của hệ thống: `http://[IP_MÁY_CHỦ]:3000`
-2. Đăng nhập bằng Auth Key. Mặc định trong file `config.json` là: `chatgpt2api` (bạn có thể đổi tùy ý).
-3. Tại giao diện chính, chuyển sang tab **Tài khoản (Account Pool)**.
-4. Bấm vào nút **Nhập Access Token (Import Access Token)**.
-5. Dán đoạn Access Token bạn vừa copy ở Bước 2 vào ô trống, mỗi token nằm trên 1 dòng nếu bạn có nhiều tài khoản.
-6. Bấm **Xác nhận (Confirm)**. Hệ thống sẽ tự động kiểm tra xem tài khoản là Plus hay Thường, và đưa vào trạng thái Hoạt động (Active).
+### 5. Tab Models
+- **Công dụng**: Ẩn/Hiện model. Đảm bảo bạn bật đúng model cần xài để ứng dụng ngoài quét được `/v1/models`.
 
----
-
-## 4. Tích Hợp Vào Home Assistant
-
-Để sử dụng ChatGPT2API làm não bộ cho trợ lý ảo của Home Assistant, bạn cần cấu hình tích hợp **OpenAI Conversation** (Hoặc các bản mod tương tự như Local OpenAI).
-
-1. Vào Home Assistant -> **Cài đặt (Settings)** -> **Thiết bị & Dịch vụ (Devices & Services)**.
-2. Thêm tích hợp **OpenAI Conversation**.
-3. Điền các thông số sau:
-   - **API Key**: `chatgpt2api` (Phải khớp với `auth-key` trong config.json)
-   - **Base URL**: `http://[IP_MÁY_CHỦ_CỦA_BẠN]:3000/v1`
-4. Bấm Xác nhận. 
-5. Sau khi thêm xong, cấu hình Integration và chọn mô hình (Model) là `auto` hoặc `gpt-4o`.
+### 6. Tab MCP Servers (Công Cụ Mở Rộng AI)
+- **Công dụng**: Gắn thêm "Tay chân", "Mắt mũi" cho AI (giúp AI biết Search, xem thời tiết).
+- **Cách kết nối**: Nhập `http://[IP_MÁY_CHỦ]:8005` vào phần MCP Hub URL. Bấm Install các Preset có sẵn.
 
 ---
 
-## 5. Tối Ưu Hóa Cho Loa Thông Minh (TTS)
+## 🧠 Đào Sâu Giao Diện VN MCP Hub Studio
 
-Tuy bản thân ChatGPT2API đã tự động lọc sạch các mã Markdown (dấu `#`, `*`, `- `) khi trả về, nhưng để câu văn tự nhiên nhất khi phát qua loa, bạn cần thêm System Prompt vào Home Assistant.
+Truy cập trang `http://[IP_MÁY_CHỦ]:8005/studio` để mở giao diện quản trị MCP.
 
-Vào **Cài đặt -> Trợ lý giọng nói -> Chọn Trợ lý của bạn -> Phần Chỉ thị (Instructions)**, dán đoạn sau:
+### 1. Tab Knowledge Base (Trí Nhớ Cục Bộ - RAG)
+Tự dạy AI bằng cách dán tài liệu công ty/gia đình vào kho. Hub sẽ băm nhỏ và nhét vào Vector DB. AI sẽ ưu tiên tìm trong kho này khi trả lời.
 
-> *"Bạn là trợ lý ảo nhà thông minh. Hãy trả lời cực kỳ ngắn gọn, tự nhiên và giống văn nói của con người để hệ thống TTS có thể đọc mượt mà. Tuyệt đối KHÔNG sử dụng các ký tự định dạng (như dấu sao *, dấu thăng #, gạch đầu dòng -). Không dùng danh sách liệt kê, hạn chế tối đa ngoặc đơn. Trả lời thẳng vào trọng tâm câu hỏi. QUAN TRỌNG: Ngay cả khi lấy dữ liệu từ Web Search, tuyệt đối không được dùng định dạng liệt kê."*
+### 2. Tab Multi-Search
+Chọn các cỗ máy tìm kiếm như DuckDuckGo, Brave Search, Wikipedia. Nếu RAG không có đáp án, Hub âm thầm gọi Search thực tế.
+
+### 3. Tab Cloud Storage
+Lưu trữ định kỳ dữ liệu RAG lên Cloudflare R2 / AWS S3 để tránh mất mát.
 
 ---
 
-## 6. Cập Nhật Code (Khi có bản sửa lỗi mới)
+## 🏠 Hướng Dẫn Tích Hợp Chi Tiết (Home Assistant, n8n, WebUI)
 
-Nếu có bản cập nhật mới trên Github, bạn chỉ cần thực hiện 3 lệnh sau để nâng cấp:
+### 1. Tích Hợp Vào Home Assistant
+1. **Settings** -> **Devices & Services** -> **Add Integration** -> **OpenAI Conversation**.
+2. **API Key**: Mật khẩu của bạn.
+3. **Base URL**: `http://[IP_MÁY_CHỦ]:3000/v1`
+4. Cấu hình Integration chọn model là `AI Agent` (Combo vừa tạo).
+
+#### 🔊 Tối Ưu Hóa Giọng Nói (TTS)
+Vào Voice Assistants, dán Prompt sau vào **Instructions**:
+> *"Bạn là trợ lý ảo nhà thông minh. Hãy trả lời cực kỳ ngắn gọn, tự nhiên và giống văn nói của con người để hệ thống TTS có thể đọc mượt mà. Tuyệt đối KHÔNG sử dụng các ký tự định dạng (như dấu sao *, dấu thăng #, gạch đầu dòng -). Không dùng danh sách liệt kê, hạn chế tối đa ngoặc đơn. Trả lời thẳng vào trọng tâm câu hỏi. QUAN TRỌNG: Ngay cả khi lấy dữ liệu từ Web Search hoặc MCP, tuyệt đối không được dùng định dạng liệt kê."*
+
+### 2. Tích Hợp Open WebUI
+1. Admin Panel -> **Settings** -> **Connections** -> **OpenAI API**.
+2. **URL**: `http://[IP_MÁY_CHỦ]:3000/v1` và **Key**: Mật khẩu của bạn.
+
+---
+
+## 🚨 Khắc Phục Sự Cố (Troubleshooting)
+
+| Tình Trạng | Nguyên Nhân & Cách Xử Lý |
+| :--- | :--- |
+| **Assistant trả lời có mã `#`, `*` đọc khó nghe** | Kiểm tra lại System Prompt trong Home Assistant. Đảm bảo có câu "Tuyệt đối không dùng định dạng liệt kê". |
+| **Báo lỗi 400 "Model not supported"** | Bạn điền sai tên model. Kiểm tra Tab Models để lấy đúng Prefix (VD: `chatgpt/auto`). |
+| **Tài khoản ChatGPT bị Expired** | Bạn đã Log Out tài khoản. Hãy mở tab ẩn danh mới, copy accessToken và tắt tab, KHÔNG ĐƯỢC bấm Log Out. |
+
+---
+
+## 🔄 Cập Nhật Phiên Bản Mới
 
 ```bash
 cd /opt/chatgpt2api
-docker-compose down
-git pull origin main
-docker-compose up -d --build
+docker compose pull
+docker compose up -d
 ```
+Mọi cấu hình và dữ liệu của bạn đều được giữ nguyên 100%.
