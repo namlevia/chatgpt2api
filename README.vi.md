@@ -133,6 +133,8 @@ Nếu bạn sử dụng Portainer để quản lý Docker:
 
 ## 🎛️ Đào Sâu Dashboard ChatGPT2API (Hướng Dẫn Chi Tiết Từng Tab)
 
+> **👉 XEM CHI TIẾT:** Các cách Đăng nhập ChatGPT (Access Token/Refresh Token) và hướng dẫn cấu hình chuyên sâu các Tab tại đây: **[📖 Hướng Dẫn Sử Dụng ChatGPT2API](README_ChatGPT2API.vi.md)**
+
 Sau khi cài đặt xong, bạn truy cập vào trang quản trị tại `http://[IP_MÁY_CHỦ]:3000` và đăng nhập bằng mật khẩu (Auth Key). Giao diện bên tay trái sẽ gồm các Tab chính, đây là cách làm chủ từng mục:
 
 ### 1. Tab Overview (Tổng Quan)
@@ -168,6 +170,8 @@ Sau khi cài đặt xong, bạn truy cập vào trang quản trị tại `http:/
 ---
 
 ## 🧠 Đào Sâu Giao Diện VN MCP Hub Studio
+
+> **👉 XEM CHI TIẾT:** Hướng dẫn dạy kiến thức cho AI (RAG) và cấu hình cỗ máy tìm kiếm tại đây: **[📖 Hướng Dẫn Cấu Hình VN MCP Hub](README_VN_MCP_HUB.vi.md)**
 
 Truy cập trang `http://[IP_MÁY_CHỦ]:8005/studio` để mở giao diện quản trị MCP.
 

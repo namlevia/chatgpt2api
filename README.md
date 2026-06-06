@@ -133,6 +133,8 @@ If you use Portainer to manage Docker:
 
 ## 🎛️ Deep Dive into ChatGPT2API Dashboard
 
+> **👉 SEE DETAILS:** For ChatGPT Login methods (Access Token/Refresh Token) and in-depth Tab configurations, check out: **[📖 ChatGPT2API User Guide](README_ChatGPT2API.md)**
+
 After installation, access the admin page at `http://[SERVER_IP]:3000` and log in with your password (Auth Key). The left-hand interface consists of main tabs. Here's how to master each one:
 
 ### 1. Overview Tab
@@ -191,6 +193,8 @@ After installation, access the admin page at `http://[SERVER_IP]:3000` and log i
 ---
 
 ## 🧠 Deep Dive into VN MCP Hub Studio (RAG Database)
+
+> **👉 SEE DETAILS:** For instructions on teaching the AI (RAG) and configuring search engines, check out: **[📖 VN MCP Hub Configuration Guide](README_VN_MCP_HUB.md)**
 
 Access `http://[SERVER_IP]:8005/studio` to open the AI's memory and tool control interface.
 

@@ -1,0 +1,4 @@
+docker pull ghcr.io/tritue2011/captcha-solver:latest && docker rm -f captcha-solver && docker run -d --name captcha-solver --restart unless-stopped -p 6080:6080 -p 8010:8010 -v /opt/captcha-solver-data:/data -e CAPTCHA_SOLVER_API_KEY='AnhNhi@0610' ghcr.io/tritue2011/captcha-solver:latest
+docker pull ghcr.io/tritue2011/vn-mcp-hub:latest && docker rm -f vn-mcp-hub && docker run -d --name vn-mcp-hub --restart unless-stopped --network host -v /opt/vn-mcp-hub-chroma:/app/chroma_db -v /opt/vn-mcp-hub-data:/app/data ghcr.io/tritue2011/vn-mcp-hub:latest
+docker pull ghcr.io/tritue2011/chatgpt2api:latest && docker rm -f chatgpt2api && docker run -d --name chatgpt2api --restart unless-stopped -p 3030:80 -v /opt/chatgpt2api-data:/app/data -e CHATGPT2API_AUTH_KEY='AnhNhi@0610' -e STORAGE_BACKEND=json ghcr.io/tritue2011/chatgpt2api:latest
+bash /opt/chatgpt2api/deploy.sh
