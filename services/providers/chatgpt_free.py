@@ -148,6 +148,9 @@ def handle_free_chat(
                 or "rate_limit" in err_msg
                 or "too many requests" in err_msg
                 or "hit your limit" in err_msg
+                or "reached the limit" in err_msg
+                or "reached your limit" in err_msg
+                or ("limit" in err_msg and requires_image)
             )
             is_payload_too_large = (
                 "413" in err_msg or "payload too large" in err_msg
