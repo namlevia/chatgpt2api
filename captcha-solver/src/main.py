@@ -1307,52 +1307,59 @@ async def _auto_refresh_loop(interval_minutes: int = 30):
                 profile = "chatgpt-" + email.split("@")[0].replace(".", "-")
 
                 try:
-                    logger.info("auto_refresh: refreshing %s (profile=%s)", email, profile)
-                    # Quick scrape first
-                    async with pool.page(profile=profile, headless=True) as page:
-                        if "chatgpt.com" not in (page.url or ""):
-                            await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=20_000)
-                            await asyncio.sleep(3.0)
-                        from .chatgpt_login import _scrape_chatgpt_token
-                        token, _, preview = await _scrape_chatgpt_token(page)
-                        if token:
-                            await _update_chatgpt2api_token(token)
-                            logger.info("auto_refresh: %s OK (scrape)", email)
+                    try:
+                        logger.info("auto_refresh: refreshing %s (profile=%s)", email, profile)
+                        # Quick scrape first
+                        scrape_ok = False
+                        async with pool.page(profile=profile, headless=True) as page:
+                            if "chatgpt.com" not in (page.url or ""):
+                                await page.goto("https://chatgpt.com/", wait_until="domcontentloaded", timeout=20_000)
+                                await asyncio.sleep(3.0)
+                            from .chatgpt_login import _scrape_chatgpt_token
+                            token, _, preview = await _scrape_chatgpt_token(page)
+                            if token:
+                                await _update_chatgpt2api_token(token)
+                                logger.info("auto_refresh: %s OK (scrape)", email)
+                                scrape_ok = True
+                        if scrape_ok:
                             continue
-                except Exception as exc:
-                    logger.warning("auto_refresh: scrape failed for %s: %s", email, str(exc)[:100])
+                    except Exception as exc:
+                        logger.warning("auto_refresh: scrape failed for %s: %s", email, str(exc)[:100])
 
-                # Scrape failed — full re-login
-                try:
-                    full = db_get_account(email)
-                    if not full:
-                        continue
+                    # Scrape failed — full re-login
+                    try:
+                        full = db_get_account(email)
+                        if not full:
+                            continue
 
+                        await pool.close_profile(profile)
+                        await asyncio.sleep(1.0)
+
+                        session = await start_chatgpt_onboard(
+                            profile=profile,
+                            email=full["email"],
+                            password=full["password"],
+                            totp_secret=full.get("totp_secret", ""),
+                        )
+
+                        deadline = time.time() + 300
+                        while time.time() < deadline and _refresh_running:
+                            await asyncio.sleep(2.0)
+                            s = get_chatgpt_session(profile)
+                            if not s:
+                                continue
+                            if s.state == "success" and s.access_token:
+                                await _update_chatgpt2api_token(s.access_token)
+                                logger.info("auto_refresh: %s OK (relogin)", email)
+                                break
+                            if s.state == "failed":
+                                logger.warning("auto_refresh: %s re-login failed: %s", email, s.error)
+                                break
+                    except Exception as exc:
+                        logger.warning("auto_refresh: %s error: %s", email, str(exc)[:100])
+                finally:
+                    # Đảm bảo tắt ngay trình duyệt sau khi xử lý xong tài khoản này
                     await pool.close_profile(profile)
-                    await asyncio.sleep(1.0)
-
-                    session = await start_chatgpt_onboard(
-                        profile=profile,
-                        email=full["email"],
-                        password=full["password"],
-                        totp_secret=full.get("totp_secret", ""),
-                    )
-
-                    deadline = time.time() + 300
-                    while time.time() < deadline and _refresh_running:
-                        await asyncio.sleep(2.0)
-                        s = get_chatgpt_session(profile)
-                        if not s:
-                            continue
-                        if s.state == "success" and s.access_token:
-                            await _update_chatgpt2api_token(s.access_token)
-                            logger.info("auto_refresh: %s OK (relogin)", email)
-                            break
-                        if s.state == "failed":
-                            logger.warning("auto_refresh: %s re-login failed: %s", email, s.error)
-                            break
-                except Exception as exc:
-                    logger.warning("auto_refresh: %s error: %s", email, str(exc)[:100])
 
         except Exception as exc:
             logger.warning("auto_refresh: loop error: %s", str(exc)[:120])
