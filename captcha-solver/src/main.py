@@ -823,22 +823,9 @@ async def api_auto_login_sessions() -> dict[str, Any]:
 @app.get("/v1/session/{profile}/warmup", dependencies=[Depends(require_api_key)])
 async def api_session_warmup(profile: str, provider: str = "gemini_web") -> dict[str, Any]:
     """Khởi động ngầm trình duyệt (warm up) để giảm độ trễ cho câu hỏi đầu tiên."""
-    try:
-        url_map = {
-            "gemini_web": "https://gemini.google.com/app",
-            "flow": "https://aistudio.google.com/"
-        }
-        target_url = url_map.get(provider, "")
-        
-        async with pool.page(profile=profile, headless=False) as page:
-            if target_url and not page.url.startswith(target_url):
-                await page.goto(target_url, wait_until="domcontentloaded", timeout=30_000)
-        return {"profile": profile, "status": "warmed_up"}
-    except HTTPException:
-        raise
-    except Exception as exc:
-        logger.exception("warmup failed profile=%s", profile)
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    # Đã vô hiệu hoá logic giữ Chrome chạy ngầm (warmup) để tiết kiệm 100% CPU.
+    # Trình duyệt giờ đây sẽ CHỈ được bật lên khi có request chat thực tế từ người dùng.
+    return {"profile": profile, "status": "warmed_up_bypassed_to_save_cpu"}
 
 
 @app.get("/v1/profiles", dependencies=[Depends(require_api_key)])
