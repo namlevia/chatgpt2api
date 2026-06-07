@@ -49,6 +49,11 @@ from .gemini_web_login import (
     start_gemini_web_login,
     submit_2fa_code as submit_gemini_web_2fa_code,
 )
+from .claude_web_login import (
+    get_session as get_claude_web_session,
+    start_claude_web_login,
+    submit_2fa_code as submit_claude_web_2fa_code,
+)
 from .solvers.gemini_web import (
     analyze_image as gemini_web_analyze_image,
     chat as gemini_web_chat,
@@ -208,6 +213,13 @@ class GeminiWebChatReq(BaseModel):
     prompt: str
     timeout: int = Field(default=90, ge=20, le=300)
     headless: bool = False
+
+
+class ClaudeWebOnboardReq(BaseModel):
+    profile: str = "claude-web-default"
+    email: str
+    password: str
+    totp_secret: str = ""
 
 
 class GeminiWebImageReq(BaseModel):
@@ -659,6 +671,30 @@ async def _run_multi(req: MultiOnboardReq) -> None:
                     else:
                         state["results"][svc] = {"state": "failed", "error": "timeout"}
                     continue
+                elif svc in ("claude_web", "claude"):
+                    # Claude rides the shared Google session — scrape sessionKey.
+                    await start_claude_web_login(
+                        profile=req.profile, email=req.email, password=req.password,
+                    )
+                    cl_deadline = time.time() + 240
+                    while time.time() < cl_deadline:
+                        await _asyncio.sleep(2)
+                        cur = get_claude_web_session(req.profile)
+                        if cur is None:
+                            continue
+                        if cur.state == "success":
+                            state["results"][svc] = {
+                                "state": "success",
+                                "session_key": getattr(cur, "session_key", None),
+                                "email": req.email,
+                            }
+                            break
+                        if cur.state in ("failed", "error"):
+                            state["results"][svc] = {"state": "failed", "error": cur.error or cur.message}
+                            break
+                    else:
+                        state["results"][svc] = {"state": "failed", "error": "timeout"}
+                    continue
                 else:
                     state["results"][svc] = {"state": "skipped", "error": "unknown service"}
                     continue
@@ -905,6 +941,59 @@ async def api_gemini_web_onboard_2fa_code(profile: str, req: TwoFactorCodeReq) -
             detail="Phiên không ở state=need_code",
         )
     return {"profile": profile, "submitted": True}
+
+
+# ── Claude Web (claude.ai) ──────────────────────────────────────────────
+
+@app.post("/v1/claude-web/onboard", dependencies=[Depends(require_api_key)])
+async def api_claude_web_onboard(req: ClaudeWebOnboardReq) -> dict[str, Any]:
+    """Onboard a profile for Claude Web (claude.ai) via Google account.
+
+    Reuses the profile's existing Google session (from Flow / ChatGPT /
+    Gemini onboard) — no second 2FA — otherwise runs the standard Google
+    login. On success the response carries the scraped `sessionKey` cookie.
+    """
+    session = await start_claude_web_login(
+        profile=req.profile, email=req.email, password=req.password,
+        totp_secret=req.totp_secret,
+    )
+    try: save_account(req.email, req.password, req.totp_secret, "")
+    except Exception: pass
+    return {
+        **session.to_dict(),
+        "novnc": settings.novnc_external_url,
+        "note": "Theo dõi /v1/claude-web/{profile}/onboard-status. Khi state=success, "
+                "lấy sessionKey ở /v1/claude-web/{profile}/session.",
+    }
+
+
+@app.get("/v1/claude-web/{profile}/onboard-status", dependencies=[Depends(require_api_key)])
+async def api_claude_web_onboard_status(profile: str) -> dict[str, Any]:
+    session = get_claude_web_session(profile)
+    if session is None:
+        return {"profile": profile, "state": "none", "message": "Chưa có phiên onboard"}
+    return session.to_dict()
+
+
+@app.post("/v1/claude-web/{profile}/onboard-2fa-code", dependencies=[Depends(require_api_key)])
+async def api_claude_web_onboard_2fa_code(profile: str, req: TwoFactorCodeReq) -> dict[str, Any]:
+    ok = submit_claude_web_2fa_code(profile, req.code)
+    if not ok:
+        raise HTTPException(status_code=409, detail="Phiên không ở state=need_code")
+    return {"profile": profile, "submitted": True}
+
+
+@app.get("/v1/claude-web/{profile}/session", dependencies=[Depends(require_api_key)])
+async def api_claude_web_session(profile: str) -> dict[str, Any]:
+    """Return the scraped claude.ai sessionKey for a logged-in profile.
+
+    chatgpt2api's api/claude.py calls this to obtain the cookie instead of
+    storing a static session_key in config.
+    """
+    session = get_claude_web_session(profile)
+    if session is None or not session.session_key:
+        raise HTTPException(status_code=404, detail="Chưa có sessionKey (onboard Claude Web trước)")
+    return {"profile": profile, "session_key": session.session_key, "email": session.email}
 
 
 @app.post("/v1/gemini-web/chat", dependencies=[Depends(require_api_key)])
