@@ -109,7 +109,7 @@ async def _pick_google_account(page, email: str) -> bool:
                 for (const r of rows) {
                     if (!r.offsetParent) continue;
                     const t = (r.innerText || '').toLowerCase();
-                    if (email && t.includes(email)) { r.click(); return true; }
+                    if (!email || t.includes(email)) { r.click(); return true; }
                 }
                 return false;
             }""",
