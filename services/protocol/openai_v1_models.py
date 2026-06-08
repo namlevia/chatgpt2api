@@ -783,7 +783,7 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                     })
 
     # Always inject Claude models to the global registry so they appear in UI
-    claude_models = []
+    claude_models = ["claude/auto"]
     for b in ["sonnet-4.6", "opus-4.8", "haiku-4.5"]:
         for e in ["", "-medium", "-high", "-max"]:
             for t in ["", "-thinking"]:
