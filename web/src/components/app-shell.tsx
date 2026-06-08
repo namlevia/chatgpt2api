@@ -62,16 +62,16 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   if (pathname === "/login") return <>{children}</>;
 
   return (
-    <div className="flex min-h-screen bg-[var(--background)]">
+    <div className="flex min-h-screen bg-[var(--background)] overflow-x-hidden">
       {/* Sidebar */}
       <Sidebar collapsed={sidebarCollapsed} onToggle={() => setSidebarCollapsed(!sidebarCollapsed)} />
 
       {/* Main area */}
       <div
-        className="flex-1 flex flex-col min-h-screen"
+        className="flex-1 flex flex-col min-h-screen min-w-0"
         style={{
           marginLeft: sidebarCollapsed ? "68px" : "250px",
-          transition: "margin-left 0.25s ease",
+          transition: "margin-left 0.2s ease-out",
         }}
       >
         {/* Glass top header */}
@@ -120,7 +120,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
         </header>
 
         {/* Page content */}
-        <main className="flex-1 p-4 sm:p-6">{children}</main>
+        <main className="flex-1 min-w-0 p-4 sm:p-6">{children}</main>
       </div>
     </div>
   );
