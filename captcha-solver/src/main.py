@@ -217,8 +217,8 @@ class GeminiWebChatReq(BaseModel):
 
 class ClaudeWebOnboardReq(BaseModel):
     profile: str = "claude-web-default"
-    email: str
-    password: str
+    email: str = ""
+    password: str = ""
     totp_secret: str = ""
 
 
