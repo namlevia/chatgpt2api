@@ -17,6 +17,7 @@ import { FlowCard } from "./components/flow-card";
 import { ChatGPTOnboardCard } from "./components/chatgpt-onboard-card";
 import { ChatGPTWebCard } from "./components/chatgpt-web-card";
 import { GeminiWebCard } from "./components/gemini-web-card";
+import { ClaudeCard } from "./components/claude-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
 import { ImportBrowserDialog } from "./components/import-browser-dialog";
@@ -127,6 +128,14 @@ function SettingsPageContent() {
           icon={<span className="text-lg">♊</span>}
         >
           <GeminiWebCard />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Claude free (Google OAuth)"
+          description="Login claude.ai qua tài khoản Google → scrape cookie sessionKey → chat qua model claude/auto. Tái dùng chung browser profile google-<localpart> với ChatGPT/Flow/Gemini — onboard 1-click hoặc Tái dùng."
+          icon={<span className="text-lg">🤖</span>}
+        >
+          <ClaudeCard />
         </SettingsSection>
 
         <SettingsSection
