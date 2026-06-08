@@ -331,51 +331,50 @@ def create_router() -> APIRouter:
         # ── Google Labs Flow accounts branch ──
         flow_cfg = providers_cfg.get("flow") or {}
         flow_accounts = flow_cfg.get("accounts") if isinstance(flow_cfg.get("accounts"), list) else []
-        if flow_accounts:
-            items = []
-            for idx, acc in enumerate(flow_accounts):
-                if not isinstance(acc, dict):
-                    continue
-                project_id = str(acc.get("project_id") or "")
-                items.append({
-                    "ordinal": idx + 1,
-                    "is_primary": idx == 0,
-                    "profile": str(acc.get("profile") or ""),
-                    "label": str(acc.get("label") or acc.get("name") or acc.get("profile") or "—"),
-                    "project_id": project_id,
-                    "project_preview": (project_id[:8] + "..." + project_id[-4:]) if len(project_id) > 12 else project_id,
-                    "enabled": acc.get("enabled") is not False,
-                })
-            tree.append({
-                "provider": "Google Labs Flow",
-                "icon": "flow",
-                "type": "flow",
-                "instances": items,
-                "total": len(items),
-                "captcha_solver_url": flow_cfg.get("captcha_solver_url") or "",
+        items = []
+        for idx, acc in enumerate(flow_accounts):
+            if not isinstance(acc, dict):
+                continue
+            project_id = str(acc.get("project_id") or "")
+            items.append({
+                "ordinal": idx + 1,
+                "is_primary": idx == 0,
+                "profile": str(acc.get("profile") or ""),
+                "label": str(acc.get("label") or acc.get("name") or acc.get("profile") or "—"),
+                "project_id": project_id,
+                "project_preview": (project_id[:8] + "..." + project_id[-4:]) if len(project_id) > 12 else project_id,
+                "enabled": acc.get("enabled") is not False,
             })
+        tree.append({
+            "provider": "Google Labs Flow",
+            "icon": "flow",
+            "type": "flow",
+            "instances": items,
+            "total": len(items),
+            "captcha_solver_url": flow_cfg.get("captcha_solver_url") or "",
+        })
 
         # ── Claude accounts branch ──
         claude_cfg = providers_cfg.get("claude") or {}
+        # We always want Claude to show up in the accounts tab, even if 0 accounts.
         claude_profiles = claude_cfg.get("profiles") if isinstance(claude_cfg.get("profiles"), list) else []
-        if claude_profiles:
-            items = []
-            for idx, prof in enumerate(claude_profiles):
-                items.append({
-                    "ordinal": idx + 1,
-                    "is_primary": idx == 0,
-                    "profile": str(prof),
-                    "label": str(prof),
-                    "enabled": True,
-                })
-            tree.append({
-                "provider": "Claude Web",
-                "icon": "bot",
-                "type": "claude",
-                "instances": items,
-                "total": len(items),
-                "captcha_solver_url": claude_cfg.get("captcha_solver_url") or "",
+        items = []
+        for idx, prof in enumerate(claude_profiles):
+            items.append({
+                "ordinal": idx + 1,
+                "is_primary": idx == 0,
+                "profile": str(prof),
+                "label": str(prof),
+                "enabled": True,
             })
+        tree.append({
+            "provider": "Claude Web",
+            "icon": "bot",
+            "type": "claude",
+            "instances": items,
+            "total": len(items),
+            "captcha_solver_url": claude_cfg.get("captcha_solver_url") or "",
+        })
 
         # ── Custom providers branch ──
         custom_list = []
