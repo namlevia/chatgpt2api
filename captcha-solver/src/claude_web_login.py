@@ -89,6 +89,56 @@ async def _scrape_session_key(ctx) -> str:
     return ""
 
 
+async def _pick_google_account(page, email: str) -> bool:
+    """On Google's account chooser ("Choose an account to continue to Claude")
+    inside the OAuth popup, click the tile for `email`. Returns True if a tile
+    was clicked. No-op (False) when the chooser/email isn't present — the
+    consent vocab in click_google_oauth_consent can't match account tiles
+    (they show the email/name, not an affirmative button), so we need this.
+    """
+    try:
+        if "accounts.google.com" not in (page.url or ""):
+            return False
+        clicked = await page.evaluate(
+            """(email) => {
+                email = (email || '').toLowerCase();
+                const direct = document.querySelector(`[data-identifier="${email}"]`);
+                if (direct && direct.offsetParent) { direct.click(); return true; }
+                const rows = Array.from(document.querySelectorAll(
+                    'li, [data-identifier], div[role="link"], div[role="button"], a'));
+                for (const r of rows) {
+                    if (!r.offsetParent) continue;
+                    const t = (r.innerText || '').toLowerCase();
+                    if (email && t.includes(email)) { r.click(); return true; }
+                }
+                return false;
+            }""",
+            email,
+        )
+        if clicked:
+            logger.info("claude_login: picked Google account %s", email)
+            await asyncio.sleep(2.0)
+            # Try clicking "Continue" / "Tiếp tục" button that appears after picking an account
+            try:
+                await page.evaluate("""() => {
+                    const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                    for (const el of all) {
+                        if (!el.offsetParent) continue;
+                        const t = (el.innerText || el.getAttribute('aria-label') || '').trim().toLowerCase();
+                        if (t === 'continue' || t === 'tiếp tục' || t === 'tiep tuc') {
+                            el.click();
+                            return;
+                        }
+                    }
+                }""")
+            except Exception:
+                pass
+            await asyncio.sleep(1.0)
+        return bool(clicked)
+    except Exception:
+        return False
+
+
 async def start_claude_web_login(
     profile: str,
     email: str,
@@ -166,6 +216,13 @@ async def _run_inner(session: ClaudeWebLoginSession, password: str) -> None:
             pass
 
         session.message = "Click 'Continue with Google'..."
+        # claude.ai opens Google OAuth in a POPUP window — capture any new page
+        # the click spawns so we drive the login there, not the opener tab.
+        popup_holder: dict = {}
+        def _on_popup(p):
+            popup_holder.setdefault("page", p)
+        ctx.on("page", _on_popup)
+
         google_clicked = False
         for sel in _GOOGLE_BTN_SELECTORS:
             try:
@@ -192,49 +249,88 @@ async def _run_inner(session: ClaudeWebLoginSession, password: str) -> None:
             except Exception:
                 google_clicked = False
         if not google_clicked:
+            try: ctx.remove_listener("page", _on_popup)
+            except Exception: pass
             session.state = "failed"
             session.error = "Không tìm thấy nút 'Continue with Google' trên claude.ai"
             session.completed_at = time.time()
             return
 
-        # Wait for redirect to accounts.google.com.
+        # Resolve where Google OAuth landed: popup window (claude.ai default) or
+        # same-tab redirect (fallback). `auth_page` is what we drive from here.
+        auth_page = page
+        for _ in range(30):
+            pop = popup_holder.get("page")
+            if pop is not None:
+                auth_page = pop
+                try:
+                    await auth_page.wait_for_load_state("domcontentloaded", timeout=10_000)
+                except Exception:
+                    pass
+                logger.info("claude_login: OAuth popup captured url=%s", getattr(auth_page, "url", "?"))
+                break
+            if "accounts.google.com" in (page.url or ""):
+                auth_page = page
+                logger.info("claude_login: OAuth same-tab redirect")
+                break
+            await asyncio.sleep(0.5)
+        try: ctx.remove_listener("page", _on_popup)
+        except Exception: pass
+
+        # Settle on accounts.google.com.
         try:
-            await page.wait_for_url("**/accounts.google.com/**", timeout=20_000)
-            logger.info("claude_login: at google login page %s", page.url)
+            await auth_page.wait_for_url("**/accounts.google.com/**", timeout=20_000)
+            logger.info("claude_login: at google page %s", auth_page.url)
         except Exception:
-            logger.warning("claude_login: no accounts.google.com redirect after click")
+            logger.warning("claude_login: auth page not on accounts.google.com (url=%s)",
+                            getattr(auth_page, "url", "?"))
 
         try:
-            on_google = "accounts.google.com" in (page.url or "")
+            on_google = "accounts.google.com" in (auth_page.url or "")
         except Exception:
             on_google = False
 
-        # Pre-consent: profile already has Google cookies → one-button confirm.
+        pre_consent = False
+        if on_google:
+            session.message = "Chọn tài khoản Google + consent..."
+            # Reuse path: account chooser shows our tile — click it first.
+            picked = await _pick_google_account(auth_page, session.email)
+            if picked:
+                await asyncio.sleep(1.5)
+            # "Continue as <email>" / "Allow" / consent screen.
+            pre_consent = await click_google_oauth_consent(auth_page, timeout=8.0)
+            # Fresh login fallback: session expired → email/password/2FA.
+            if not pre_consent and not picked:
+                try:
+                    has_email = await auth_page.locator('input[type="email"]').count() > 0
+                except Exception:
+                    has_email = False
+                if has_email:
+                    ok = await do_google_login_steps(session, auth_page, ctx, password)
+                    if not ok:
+                        return
+                    await _pick_google_account(auth_page, session.email)
+                    try:
+                        await click_google_oauth_consent(auth_page, timeout=8.0)
+                    except Exception:
+                        pass
+
+        # OAuth popup closes itself on success — wait for the opener tab
+        # (claude.ai) to hydrate the session, then scrape the sessionKey.
+        session.message = "Chờ claude.ai nhận session..."
         try:
-            pre_consent = await click_google_oauth_consent(page, timeout=6.0)
-            if pre_consent:
-                session.message = "Đã bấm OAuth consent..."
-                await asyncio.sleep(2.0)
+            await page.bring_to_front()
         except Exception:
-            pre_consent = False
-
-        if on_google and not pre_consent:
-            # Fresh Google login (email/password/2FA) on this profile.
-            ok = await do_google_login_steps(session, page, ctx, password)
-            if not ok:
-                return
-            try:
-                if await click_google_oauth_consent(page, timeout=8.0):
-                    session.message = "Đã bấm OAuth consent..."
-                    await asyncio.sleep(2.0)
-            except Exception:
-                pass
-
-        # Wait for redirect back to claude.ai and the sessionKey cookie.
+            pass
         try:
             await page.wait_for_url("**/claude.ai/**", timeout=30_000)
         except Exception:
-            logger.warning("claude_login: no return to claude.ai (url=%s)", getattr(page, "url", "?"))
+            logger.warning("claude_login: opener not on claude.ai (url=%s)", getattr(page, "url", "?"))
+        # The opener may need a reload to pick up the post-OAuth cookie.
+        try:
+            await page.reload(wait_until="domcontentloaded", timeout=20_000)
+        except Exception:
+            pass
         await asyncio.sleep(3.0)
 
         for _ in range(20):

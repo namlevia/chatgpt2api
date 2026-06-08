@@ -198,6 +198,8 @@ _CONSENT_SCREEN_HINTS = (
     "allow this app", "cho phép ứng dụng này", "cho phep ung dung nay",
     "confirm your identity", "xác nhận danh tính", "xac nhan danh tinh",
     "verify it's you", "xác minh là bạn", "xac minh la ban",
+    "choose an account", "chọn một tài khoản", "chon mot tai khoan",
+    "sign in to", "đăng nhập vào", "dang nhap vao",
 )
 
 # Affirmative button text — matched against innerText / aria-label
