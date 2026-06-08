@@ -119,6 +119,17 @@ async def start_claude_web_login(
 
 
 async def _run(session: ClaudeWebLoginSession, password: str) -> None:
+    # Onboard FAIL -> dong browser ngay de khoi dot CPU tren Xvfb.
+    # CancelledError (login moi chiem profile) propagate -> KHONG close (ne race).
+    await _run_inner(session, password)
+    if session.state == "failed":
+        try:
+            await pool.close_profile(session.profile)
+            logger.info("closed stuck browser after failed onboard profile=%s", session.profile)
+        except Exception:
+            logger.debug("close_profile after failed onboard skipped", exc_info=True)
+
+async def _run_inner(session: ClaudeWebLoginSession, password: str) -> None:
     try:
         session.state = "starting"
         session.message = "Đang mở Chrome (headful → noVNC)"

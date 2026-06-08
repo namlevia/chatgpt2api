@@ -774,6 +774,17 @@ async def do_google_login_steps(
 
 
 async def _run(session: LoginSession, password: str) -> None:
+    # Onboard FAIL -> dong browser ngay de khoi dot CPU tren Xvfb.
+    # CancelledError (login moi chiem profile) propagate -> KHONG close (ne race).
+    await _run_inner(session, password)
+    if session.state == "failed":
+        try:
+            await pool.close_profile(session.profile)
+            logger.info("closed stuck browser after failed onboard profile=%s", session.profile)
+        except Exception:
+            logger.debug("close_profile after failed onboard skipped", exc_info=True)
+
+async def _run_inner(session: LoginSession, password: str) -> None:
     """Playwright orchestration for accounts.google.com direct login.
     Updates session.state in-place; UI polls /v1/session/{profile}/
     auto-login-status to see progress."""
