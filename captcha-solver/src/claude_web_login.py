@@ -106,14 +106,15 @@ async def _pick_google_account(page, email: str) -> bool:
                     const direct = document.querySelector(`[data-identifier="${email}"]`);
                     if (direct && direct.offsetParent) { direct.click(); return true; }
                 }
-                const rows = document.querySelectorAll('li, [data-identifier], div[role="link"], div[role="button"], a');
+                const rows = document.querySelectorAll('div[data-identifier], div[data-email], li[data-identifier]');
                 for (const r of rows) {
                     if (r.offsetHeight === 0 || !r.offsetParent) continue;
+                    const id = (r.getAttribute('data-identifier') || r.getAttribute('data-email') || '').toLowerCase();
                     const t = (r.innerText || '').toLowerCase();
                     if (email) {
-                        if (t.includes(email)) { r.click(); return true; }
+                        if (id === email || t.includes(email)) { r.click(); return true; }
                     } else {
-                        if (t.includes('@gmail.com') || (t.includes('@') && t.length > 5)) {
+                        if (id.includes('@') || t.includes('@')) {
                             r.click(); return true;
                         }
                     }
