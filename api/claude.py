@@ -220,6 +220,7 @@ class ClaudeFreeBackend:
         self._session: Any = None
         self._session_cookie: str = ""
         self._org_id: str = ""
+        self._conv_id: str = ""
 
     def _cookie_header(self) -> str:
         cfg = _claude_cfg()
@@ -263,6 +264,7 @@ class ClaudeFreeBackend:
             self._session = s
             self._session_cookie = cookie
             self._org_id = ""  # re-resolve org for the new credential
+            self._conv_id = ""  # and drop the cached conversation
         return self._session
 
     def _org_id_get(self) -> str:
@@ -298,13 +300,21 @@ class ClaudeFreeBackend:
         except Exception:
             return conv
 
+    def _conversation_get(self, org_id: str) -> str:
+        """Reuse one conversation across requests (each completion is parented
+        at ROOT, so no history bleed) — saves a create round-trip per chat.
+        chat() resets self._conv_id and retries if claude.ai 4xx's a stale one."""
+        if self._conv_id:
+            return self._conv_id
+        self._conv_id = self._create_conversation(org_id)
+        return self._conv_id
+
     def chat(self, messages: list[dict[str, Any]], model: str) -> Iterator[dict[str, Any]]:
         """Always-streaming generator of OpenAI chat.completion.chunk dicts."""
         if not self.is_available:
             raise RuntimeError("Claude not configured (providers.claude.session_key)")
 
         org_id = self._org_id_get()
-        conv_id = self._create_conversation(org_id)
         internal_model = _resolve_model(model)
 
         payload: dict[str, Any] = {
@@ -333,21 +343,27 @@ class ClaudeFreeBackend:
             if effort:
                 payload["output_config"] = {"effort": effort}
 
-        url = f"{_base_url()}/api/organizations/{org_id}/chat_conversations/{conv_id}/completion"
         _logger().info({"event": "claude_request", "model": internal_model or "auto", "msg_count": len(messages or [])})
 
-        resp = self.session.post(
-            url, json=payload, timeout=300, stream=True,
-            headers={"Accept": "text/event-stream"},
-        )
-        if resp.status_code != 200:
-            body = ""
+        # Reuse the cached conversation; a stale/expired one 4xx's, so drop it
+        # and retry once with a fresh conversation.
+        last_status, last_body = 0, ""
+        for attempt in (1, 2):
+            conv_id = self._conversation_get(org_id)
+            url = f"{_base_url()}/api/organizations/{org_id}/chat_conversations/{conv_id}/completion"
+            resp = self.session.post(
+                url, json=payload, timeout=300, stream=True,
+                headers={"Accept": "text/event-stream"},
+            )
+            if resp.status_code == 200:
+                return self._parse_stream(resp, model)
+            last_status = resp.status_code
             try:
-                body = resp.text[:200]
+                last_body = resp.text[:200]
             except Exception:
-                pass
-            raise RuntimeError(f"Claude completion failed {resp.status_code}: {body}")
-        return self._parse_stream(resp, model)
+                last_body = ""
+            self._conv_id = ""  # stale conversation → recreate on next attempt
+        raise RuntimeError(f"Claude completion failed {last_status}: {last_body}")
 
     def _parse_stream(self, response, model: str) -> Iterator[dict[str, Any]]:
         cid = f"chatcmpl-{uuid.uuid4().hex}"
@@ -437,24 +453,29 @@ def create_router() -> APIRouter:
                 detail={"error": "Claude not configured: set providers.claude.session_key in config.json"},
             )
 
-        # Build the (blocking) claude.ai iterator off the event loop.
-        try:
-            chunks = await run_in_threadpool(_backend.chat, messages, model)
-        except Exception as exc:
-            _logger().error({"event": "claude_chat_failed", "error": str(exc)})
-            raise HTTPException(status_code=502, detail={"error": f"Claude backend error: {exc}"})
-
         if body.stream:
+            # Run the whole claude.ai call lazily INSIDE the generator so tokens
+            # flush to the client as they arrive. Starlette iterates this sync
+            # generator in a threadpool, so the blocking reads never stall the
+            # event loop. (Previously chat() was awaited up-front, buffering the
+            # entire response before the first byte → TTFB == total.)
             def sse() -> Iterator[str]:
-                for chunk in chunks:
-                    yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                try:
+                    for chunk in _backend.chat(messages, model):
+                        yield f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n"
+                except Exception as exc:
+                    _logger().error({"event": "claude_chat_failed", "error": str(exc)})
+                    yield f"data: {json.dumps({'error': {'message': f'Claude backend error: {exc}'}}, ensure_ascii=False)}\n\n"
                 yield "data: [DONE]\n\n"
-            # Starlette iterates this sync generator in a threadpool, so the
-            # blocking claude.ai reads inside it never stall the event loop.
             return StreamingResponse(sse(), media_type="text/event-stream")
 
         # Non-stream: collect off the event loop.
-        content = await run_in_threadpool(_collect_text, chunks)
+        try:
+            chunks = await run_in_threadpool(_backend.chat, messages, model)
+            content = await run_in_threadpool(_collect_text, chunks)
+        except Exception as exc:
+            _logger().error({"event": "claude_chat_failed", "error": str(exc)})
+            raise HTTPException(status_code=502, detail={"error": f"Claude backend error: {exc}"})
         return {
             "id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion",
             "created": int(time.time()), "model": model,
