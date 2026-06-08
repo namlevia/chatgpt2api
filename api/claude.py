@@ -62,11 +62,14 @@ ROOT_PARENT_UUID = "00000000-0000-4000-8000-000000000000"
 # Friendly aliases → claude.ai internal model ids. Unknown values pass through;
 # "auto"/"" → omit model field (let claude.ai pick the account default).
 CLAUDE_MODEL_ALIASES: dict[str, str] = {
-    "sonnet": "claude-sonnet-4-5",
+    "sonnet": "claude-sonnet-4-6",
+    "sonnet-4.6": "claude-sonnet-4-6",
     "sonnet-4.5": "claude-sonnet-4-5",
-    "opus": "claude-opus-4-1",
+    "opus": "claude-opus-4-8",
+    "opus-4.8": "claude-opus-4-8",
     "opus-4.1": "claude-opus-4-1",
     "haiku": "claude-haiku-4-5",
+    "haiku-4.5": "claude-haiku-4-5",
 }
 
 
@@ -443,7 +446,13 @@ def create_router() -> APIRouter:
     async def claude_models(authorization: str | None = Header(default=None)):
         from api.support import require_identity
         require_identity(authorization)
-        ids = ["claude/auto", "claude/sonnet", "claude/opus", "claude/haiku"]
+        ids = [
+            "claude/auto", 
+            "claude/sonnet-4.6", 
+            "claude/sonnet-4.5", 
+            "claude/opus-4.8", 
+            "claude/haiku-4.5"
+        ]
         return {
             "object": "list",
             "data": [{"id": i, "object": "model", "owned_by": "claude"} for i in ids],

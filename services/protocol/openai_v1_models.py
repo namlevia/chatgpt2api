@@ -539,7 +539,7 @@ def invalidate_models_cache():
         pass
 
 
-_DYNAMIC_PREFIXES = ("gmw/",)
+_DYNAMIC_PREFIXES = ("gmw/", "claude/")
 
 
 def _apply_enabled_filter(data: list[dict]) -> list[dict]:
@@ -781,6 +781,11 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                         "id": provider_id, "object": "model", "created": 0,
                         "owned_by": provider_name,
                     })
+                    if provider_name == "claude":
+                        for mid in ["claude/sonnet-4.6", "claude/sonnet-4.5", "claude/opus-4.8", "claude/haiku-4.5"]:
+                            if mid not in seen:
+                                seen.add(mid)
+                                data.append({"id": mid, "object": "model", "created": 0, "owned_by": "claude"})
 
     logger.info({"event": "list_models_done", "total_models": len(data)})
     # Save to persistent disk cache (always UNFILTERED — apply_filter is applied at read time)
