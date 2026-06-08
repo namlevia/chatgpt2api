@@ -22,7 +22,7 @@ const PROVIDER_LABELS: Record<string, { label: string; color: string; tint: stri
   claude: { label: "Claude Web", color: "#D97757", tint: "amber" },
 };
 
-const CORE_MODELS = ["ha-agent", "chatgpt/auto", "cgf/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto"];
+const CORE_MODELS = ["ha-agent", "chatgpt/auto", "cgf/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto", "flow/auto", "claude/auto", "cgw/auto", "gmw/auto"];
 
 export default function ModelsPage() {
   const [available, setAvailable] = useState<Record<string, string[]>>({});

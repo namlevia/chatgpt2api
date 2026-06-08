@@ -397,23 +397,23 @@ function AccountsPageContent() {
       // Both live in `providers.{gemini_web,chatgpt_web}.profile` rather
       // than accounts.json, so they only reach the UI via /provider-tree.
       const gwBranch = ptBranches.find((b: any) => b.type === "gemini_web");
-      if (gwBranch && gwBranch.instances?.length > 0) {
+      if (gwBranch) {
         tree.push(gwBranch);
       }
       const cgwBranch = ptBranches.find((b: any) => b.type === "chatgpt_web");
-      if (cgwBranch && cgwBranch.instances?.length > 0) {
+      if (cgwBranch) {
         tree.push(cgwBranch);
       }
 
       // ── Flow branch — only available from /provider-tree ──
       const flowBranch = ptBranches.find((b: any) => b.type === "flow");
-      if (flowBranch && flowBranch.instances?.length > 0) {
+      if (flowBranch) {
         tree.push(flowBranch);
       }
 
       // ── Claude branch — only available from /provider-tree ──
       const claudeBranch = ptBranches.find((b: any) => b.type === "claude");
-      if (claudeBranch && claudeBranch.instances?.length > 0) {
+      if (claudeBranch) {
         tree.push(claudeBranch);
       }
     } catch (e) {
