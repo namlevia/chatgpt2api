@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
 import {
   Ban,
+  Bot,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -911,6 +912,7 @@ function AccountsPageContent() {
                 "card-tint-slate";
               const Icon = provider.icon === "chatgpt" ? Sparkles :
                 provider.icon === "gemini" ? Sparkles :
+                provider.icon === "bot" ? Bot :
                 provider.icon === "cpu" ? Cpu : Server;
               return (
                 <div key={provider.provider} className="rounded-[16px] card-3d overflow-hidden">
@@ -1370,6 +1372,64 @@ function AccountsPageContent() {
                         </div>
                         );
                       })}
+
+                      {/* Claude Web profile rows — each maps 1:1 to a
+                          `providers.claude.profiles[]` entry (a bare profile
+                          string). Onboarding happens in Settings → Claude card;
+                          here we list every logged-in profile with a delete
+                          action. When empty we show a hint linking to Settings. */}
+                      {provider.type === "claude" && (
+                        provider.instances && provider.instances.length > 0 ? (
+                          provider.instances.map((inst: any) => (
+                            <div key={`claude:${inst.profile}`}>
+                              <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 transition-colors">
+                                <span
+                                  className={cn(
+                                    "shrink-0 inline-flex items-center justify-center min-w-[28px] h-5 px-1.5 rounded-md text-[11px] font-mono font-bold tabular-nums",
+                                    inst.is_primary
+                                      ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300"
+                                      : "bg-slate-100 text-slate-500"
+                                  )}
+                                  title={inst.is_primary ? "Claude ưu tiên #1" : `Vị trí #${inst.ordinal}`}
+                                >
+                                  #{inst.ordinal}
+                                </span>
+                                <div className="size-8 shrink-0 rounded-full flex items-center justify-center bg-gradient-to-br from-orange-500 to-amber-600">
+                                  <span className="text-[10px] font-bold text-white">CL</span>
+                                </div>
+                                <div className="flex-1 min-w-0">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="text-[13px] font-semibold text-slate-800 truncate">{inst.label || inst.profile}</span>
+                                    <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-orange-50 text-orange-700 border border-orange-200">
+                                      Claude
+                                    </Badge>
+                                  </div>
+                                  <div className="flex items-center gap-2 mt-0.5">
+                                    <code className="text-[10px] text-slate-400">profile: {inst.profile}</code>
+                                  </div>
+                                </div>
+                                <div className="flex items-center gap-1 text-slate-400" onClick={(e) => e.stopPropagation()}>
+                                  <button
+                                    className="rounded p-0.5 hover:bg-rose-50 hover:text-rose-500"
+                                    onClick={() => void mutateProviderAccounts("claude", inst.profile, "delete")}
+                                    title="Xóa"
+                                  >
+                                    <Trash2 className="size-3" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="flex items-center gap-3 px-5 py-4 text-[13px] text-slate-500">
+                            <Bot className="size-4 text-slate-400" />
+                            <span>Chưa có tài khoản Claude.</span>
+                            <a href="/settings" className="inline-flex items-center gap-1 font-medium text-orange-600 hover:underline">
+                              <ExternalLink className="size-3.5" /> Thêm ở Settings → Claude
+                            </a>
+                          </div>
+                        )
+                      )}
 
                       {/* Providers / Custom APIs: rows like ChatGPT accounts */}
                       {(provider.type === "providers" || provider.type === "custom") && provider.instances?.map((inst: any) => {
