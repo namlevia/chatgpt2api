@@ -355,6 +355,28 @@ def create_router() -> APIRouter:
                 "captcha_solver_url": flow_cfg.get("captcha_solver_url") or "",
             })
 
+        # ── Claude accounts branch ──
+        claude_cfg = providers_cfg.get("claude") or {}
+        claude_profiles = claude_cfg.get("profiles") if isinstance(claude_cfg.get("profiles"), list) else []
+        if claude_profiles:
+            items = []
+            for idx, prof in enumerate(claude_profiles):
+                items.append({
+                    "ordinal": idx + 1,
+                    "is_primary": idx == 0,
+                    "profile": str(prof),
+                    "label": str(prof),
+                    "enabled": True,
+                })
+            tree.append({
+                "provider": "Claude Web",
+                "icon": "bot",
+                "type": "claude",
+                "instances": items,
+                "total": len(items),
+                "captcha_solver_url": claude_cfg.get("captcha_solver_url") or "",
+            })
+
         # ── Custom providers branch ──
         custom_list = []
         for cp_id, cp_cfg in custom_providers.items():

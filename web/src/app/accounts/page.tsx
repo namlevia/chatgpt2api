@@ -410,6 +410,12 @@ function AccountsPageContent() {
       if (flowBranch && flowBranch.instances?.length > 0) {
         tree.push(flowBranch);
       }
+
+      // ── Claude branch — only available from /provider-tree ──
+      const claudeBranch = ptBranches.find((b: any) => b.type === "claude");
+      if (claudeBranch && claudeBranch.instances?.length > 0) {
+        tree.push(claudeBranch);
+      }
     } catch (e) {
       console.error("buildProviderTree failed:", e);
     }
@@ -626,7 +632,7 @@ function AccountsPageContent() {
   // chatgpt_web). Mirrors the ChatGPT pool's per-row actions: each row
   // can be removed entirely or flipped enabled/disabled in the rotation.
   const mutateProviderAccounts = async (
-    providerKey: "flow" | "gemini_web" | "chatgpt_web",
+    providerKey: "flow" | "gemini_web" | "chatgpt_web" | "claude",
     profile: string,
     op: "delete" | "toggle",
   ) => {
@@ -634,19 +640,34 @@ function AccountsPageContent() {
       const cur = (await request.get("/api/settings")).data as any;
       const providers = { ...((cur?.config?.providers) || {}) };
       const cfg = { ...((providers[providerKey] as any) || {}) };
-      const accounts = Array.isArray(cfg.accounts) ? cfg.accounts.slice() : [];
-      const idx = accounts.findIndex((a: any) => a?.profile === profile);
-      if (idx < 0) {
-        toast.error(`Không tìm thấy profile ${profile}`);
-        return;
-      }
-      if (op === "delete") {
-        accounts.splice(idx, 1);
+      
+      if (providerKey === "claude") {
+        const profiles = Array.isArray(cfg.profiles) ? cfg.profiles.slice() : [];
+        const idx = profiles.indexOf(profile);
+        if (idx < 0) {
+          toast.error(`Không tìm thấy profile ${profile}`);
+          return;
+        }
+        if (op === "delete") {
+          profiles.splice(idx, 1);
+        }
+        cfg.profiles = profiles;
       } else {
-        const cur = accounts[idx] || {};
-        accounts[idx] = { ...cur, enabled: cur.enabled === false };
+        const accounts = Array.isArray(cfg.accounts) ? cfg.accounts.slice() : [];
+        const idx = accounts.findIndex((a: any) => a?.profile === profile);
+        if (idx < 0) {
+          toast.error(`Không tìm thấy profile ${profile}`);
+          return;
+        }
+        if (op === "delete") {
+          accounts.splice(idx, 1);
+        } else {
+          const cur = accounts[idx] || {};
+          accounts[idx] = { ...cur, enabled: cur.enabled === false };
+        }
+        cfg.accounts = accounts;
       }
-      cfg.accounts = accounts;
+      
       providers[providerKey] = cfg;
       await request.post("/api/settings", { providers });
       toast.success(op === "delete" ? "Đã xóa tài khoản" : "Đã đổi trạng thái");
