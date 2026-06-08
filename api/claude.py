@@ -153,6 +153,12 @@ def _resolve_model(model: str) -> str:
         if m.startswith(pfx):
             m = m[len(pfx):].strip()
             break
+    
+    # Strip effort and thinking suffixes
+    for sfx in ("-low", "-medium", "-high", "-max", "-thinking", "-think"):
+        if m.endswith(sfx):
+            m = m[:-len(sfx)]
+    
     if not m or m == "auto":
         m = str(_claude_cfg().get("model") or "").strip()
     if not m or m == "auto":
@@ -312,6 +318,20 @@ class ClaudeFreeBackend:
         }
         if internal_model:
             payload["model"] = internal_model
+            
+        raw_m = str(model or "").lower()
+        effort = None
+        if "-low" in raw_m: effort = "low"
+        elif "-medium" in raw_m: effort = "medium"
+        elif "-high" in raw_m: effort = "high"
+        elif "-max" in raw_m: effort = "max"
+        
+        thinking = "-thinking" in raw_m or "-think" in raw_m
+        
+        if thinking or effort:
+            payload["thinking"] = {"type": "adaptive"}
+            if effort:
+                payload["output_config"] = {"effort": effort}
 
         url = f"{_base_url()}/api/organizations/{org_id}/chat_conversations/{conv_id}/completion"
         _logger().info({"event": "claude_request", "model": internal_model or "auto", "msg_count": len(messages or [])})
