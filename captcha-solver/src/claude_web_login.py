@@ -102,14 +102,21 @@ async def _pick_google_account(page, email: str) -> bool:
         clicked = await page.evaluate(
             """(email) => {
                 email = (email || '').toLowerCase();
-                const direct = document.querySelector(`[data-identifier="${email}"]`);
-                if (direct && direct.offsetParent) { direct.click(); return true; }
-                const rows = Array.from(document.querySelectorAll(
-                    'li, [data-identifier], div[role="link"], div[role="button"], a'));
+                if (email) {
+                    const direct = document.querySelector(`[data-identifier="${email}"]`);
+                    if (direct && direct.offsetParent) { direct.click(); return true; }
+                }
+                const rows = document.querySelectorAll('li, [data-identifier], div[role="link"], div[role="button"], a');
                 for (const r of rows) {
-                    if (!r.offsetParent) continue;
+                    if (r.offsetHeight === 0 || !r.offsetParent) continue;
                     const t = (r.innerText || '').toLowerCase();
-                    if (!email || t.includes(email)) { r.click(); return true; }
+                    if (email) {
+                        if (t.includes(email)) { r.click(); return true; }
+                    } else {
+                        if (t.includes('@gmail.com') || (t.includes('@') && t.length > 5)) {
+                            r.click(); return true;
+                        }
+                    }
                 }
                 return false;
             }""",
