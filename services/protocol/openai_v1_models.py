@@ -782,11 +782,11 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                         "owned_by": provider_name,
                     })
                     if provider_name == "claude":
-                        claude_models = [
-                            "claude/sonnet-4.6", "claude/sonnet-4.6-thinking", "claude/sonnet-4.6-high", "claude/sonnet-4.6-max",
-                            "claude/opus-4.8", "claude/opus-4.8-thinking", "claude/opus-4.8-max",
-                            "claude/sonnet-4.5", "claude/haiku-4.5"
-                        ]
+                        claude_models = []
+                        for b in ["sonnet-4.6", "opus-4.8", "haiku-4.5"]:
+                            for e in ["", "-medium", "-high", "-max"]:
+                                for t in ["", "-thinking"]:
+                                    claude_models.append(f"claude/{b}{e}{t}")
                         for mid in claude_models:
                             if mid not in seen:
                                 seen.add(mid)

@@ -466,13 +466,11 @@ def create_router() -> APIRouter:
     async def claude_models(authorization: str | None = Header(default=None)):
         from api.support import require_identity
         require_identity(authorization)
-        ids = [
-            "claude/auto", 
-            "claude/sonnet-4.6", 
-            "claude/sonnet-4.5", 
-            "claude/opus-4.8", 
-            "claude/haiku-4.5"
-        ]
+        ids = ["claude/auto", "claude/sonnet-4.5"]
+        for b in ["sonnet-4.6", "opus-4.8", "haiku-4.5"]:
+            for e in ["", "-medium", "-high", "-max"]:
+                for t in ["", "-thinking"]:
+                    ids.append(f"claude/{b}{e}{t}")
         return {
             "object": "list",
             "data": [{"id": i, "object": "model", "owned_by": "claude"} for i in ids],
