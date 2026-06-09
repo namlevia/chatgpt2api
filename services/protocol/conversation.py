@@ -716,6 +716,7 @@ class ConversationState:
     blocked: bool = False
     tool_invoked: bool | None = None
     turn_use_case: str = ""
+    accept_text: bool = True
 
 
 @dataclass
@@ -897,6 +898,25 @@ def conversation_base_event(event_type: str, state: ConversationState, **extra: 
     }
 
 
+def _message_is_user_facing(event: dict[str, Any]) -> "bool | None":
+    """True if the event's message is the assistant's user-facing answer
+    (recipient 'all'), False for tool-directed assistant messages (e.g. a
+    web_search query) and tool results, None when the event carries no message
+    metadata (a streaming patch — keep the previous decision)."""
+    for candidate in (event, event.get("v")):
+        if not isinstance(candidate, dict):
+            continue
+        message = candidate.get("message")
+        if not isinstance(message, dict):
+            continue
+        role = str((message.get("author") or {}).get("role") or "").strip().lower()
+        if role != "assistant":
+            return False
+        recipient = str(message.get("recipient") or "all").strip().lower()
+        return recipient in ("all", "")
+    return None
+
+
 def iter_conversation_payloads(payloads: Iterator[str], history_text: str = "",
                                history_messages: list[str] | None = None) -> Iterator[dict[str, Any]]:
     state = ConversationState()
@@ -921,6 +941,15 @@ def iter_conversation_payloads(payloads: Iterator[str], history_text: str = "",
         if event.get("error"):
             raise RuntimeError(str(event.get("error")))
         update_conversation_state(state, payload, event)
+        # Keep tool-directed messages (e.g. web_search query JSON) and tool
+        # results out of the user-facing text. Patches (no message metadata)
+        # inherit the last message's decision.
+        _facing = _message_is_user_facing(event)
+        if _facing is not None:
+            state.accept_text = _facing
+        if not state.accept_text:
+            yield conversation_base_event("conversation.event", state, raw=event)
+            continue
         if history_index < len(history_messages) and event_assistant_text(event, history_text) == history_messages[history_index]:
             history_index += 1
             state.text = ""
