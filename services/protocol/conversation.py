@@ -758,12 +758,28 @@ class ImageOutput:
         return chunk
 
 
+_TOOL_LEAK_RE = re.compile(
+    r"```[a-zA-Z]*\s*\n?\s*<([a-zA-Z_][\w-]*)\b[^>]*>\s*(?:</\1>)?\s*\n?\s*```",
+    re.DOTALL,
+)
+
+
+def _strip_tool_leak(text: str) -> str:
+    """Drop fenced blocks that are just a tool-call XML tag (e.g.
+    ```xml\\n<get_exchange_rate .../></get_exchange_rate>\\n``` ) — chatgpt.com's
+    web search sometimes emits these as visible text when the model reaches for
+    a tool we don't execute. The empty-tag shape leaves real code blocks alone."""
+    if "```" in text and "<" in text:
+        text = _TOOL_LEAK_RE.sub("", text)
+    return text
+
+
 def assistant_message_text(message: dict[str, Any]) -> str:
     content = message.get("content") or {}
     parts = content.get("parts") or []
     if not isinstance(parts, list):
         return ""
-    return "".join(part for part in parts if isinstance(part, str))
+    return _strip_tool_leak("".join(part for part in parts if isinstance(part, str)))
 
 
 def strip_history(text: str, history_text: str = "") -> str:
