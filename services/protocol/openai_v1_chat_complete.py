@@ -1249,6 +1249,34 @@ def _prefetch_ha_context_if_needed(
         logger.warning({"event": "ha_prefetch_search_failed", "error": str(exc)[:80]})
 
 
+    # Preferred fallback for general queries: report exactly the entities HA
+    # exposes to Assist (curated ≈116) with their live states — not all ~989.
+    # Honors the user's "Expose" config and keeps the injected context small.
+    if not context_lines:
+        try:
+            from services.ha_client import get_states, get_exposed_entity_ids
+            exposed = get_exposed_entity_ids()
+            if exposed:
+                ex_lines = []
+                for s in get_states():
+                    eid = s.get("entity_id", "")
+                    if eid not in exposed:
+                        continue
+                    attrs = s.get("attributes", {}) or {}
+                    name = attrs.get("friendly_name", eid)
+                    st = str(s.get("state", "unknown"))
+                    unit = str(attrs.get("unit_of_measurement", "") or "").strip()
+                    state_str = f"{st} {unit}".strip() if unit else st
+                    ex_lines.append(f"- {name} ({eid}): **{state_str}**")
+                if ex_lines:
+                    context_lines = ex_lines
+                    logger.info({"event": "ha_prefetch_exposed_only",
+                                 "exposed_total": len(exposed),
+                                 "lines": len(ex_lines)})
+        except Exception as exc:
+            logger.warning({"event": "ha_prefetch_exposed_failed",
+                            "error": str(exc)[:80]})
+
     if not context_lines:
         # Fallback: use static cache but only take the controllable device lines
         # (skip sensors/weather) and limit to 25000 chars total

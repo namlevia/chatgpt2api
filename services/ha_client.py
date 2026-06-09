@@ -24,6 +24,11 @@ _DEFAULT_TTL = 60  # 60s — short enough that registry state stays fresh
                    # entities don't cost more than ~1 HA call per minute.
 _scheduler_started = False
 
+# Entity_ids HA exposes to Assist (voice). Refreshed lazily / by the scheduler.
+_exposed_cache: set[str] = set()
+_exposed_cache_ts: float = 0.0
+_EXPOSED_TTL = 600  # exposure config changes rarely → refresh every 10 min
+
 
 def _get_ha_settings() -> dict:
     """Get HA settings: url, token, refresh_interval, refresh_times."""
@@ -108,6 +113,114 @@ def get_states(use_cache: bool = True) -> list[dict[str, Any]]:
         return _state_cache or []  # return stale cache on error
 
 
+# ── Exposed-entity (Assist) list ────────────────────────────────────────────
+# HA exposes only a curated subset of entities to the voice assistant
+# ("Settings → Voice assistants → Expose"). For a general "trạng thái nhà"
+# query we report exactly that set (≈116) instead of all ~989 entities. The
+# list is only available over the WebSocket API; we speak raw WS with the
+# stdlib (no extra deps) and cache the result.
+def _ws_fetch_exposed(url: str, token: str) -> set[str]:
+    import socket, base64, os, struct
+
+    netloc = url.split("//", 1)[-1].split("/")[0]
+    host = netloc.split(":")[0]
+    port = int(netloc.rsplit(":", 1)[1]) if ":" in netloc else 8123
+    key = base64.b64encode(os.urandom(16)).decode()
+    s = socket.create_connection((host, port), timeout=8)
+    s.settimeout(8)
+    try:
+        s.sendall((
+            f"GET /api/websocket HTTP/1.1\r\nHost: {host}:{port}\r\n"
+            "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+            f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
+        ).encode())
+        resp = b""
+        while b"\r\n\r\n" not in resp:
+            chunk = s.recv(4096)
+            if not chunk:
+                raise RuntimeError("ws handshake closed")
+            resp += chunk
+
+        buf = bytearray()
+
+        def _need(n: int) -> None:
+            while len(buf) < n:
+                c = s.recv(8192)
+                if not c:
+                    raise RuntimeError("ws closed")
+                buf.extend(c)
+
+        def _recv() -> str:
+            _need(2)
+            ln = buf[1] & 0x7F
+            idx = 2
+            if ln == 126:
+                _need(4); ln = struct.unpack(">H", bytes(buf[2:4]))[0]; idx = 4
+            elif ln == 127:
+                _need(10); ln = struct.unpack(">Q", bytes(buf[2:10]))[0]; idx = 10
+            _need(idx + ln)
+            p = bytes(buf[idx:idx + ln])
+            del buf[:idx + ln]
+            return p.decode("utf-8", "replace")
+
+        def _send(obj: dict) -> None:
+            d = json.dumps(obj).encode()
+            m = os.urandom(4)
+            h = bytearray([0x81])
+            n = len(d)
+            if n < 126:
+                h.append(0x80 | n)
+            elif n < 65536:
+                h.append(0x80 | 126); h += struct.pack(">H", n)
+            else:
+                h.append(0x80 | 127); h += struct.pack(">Q", n)
+            h += m
+            s.sendall(bytes(h) + bytes(b ^ m[i % 4] for i, b in enumerate(d)))
+
+        _recv()  # auth_required
+        _send({"type": "auth", "access_token": token})
+        _recv()  # auth_ok / auth_invalid
+        _send({"id": 1, "type": "homeassistant/expose_entity/list"})
+        exposed: set[str] = set()
+        for _ in range(8):
+            msg = json.loads(_recv())
+            if msg.get("id") == 1 and msg.get("type") == "result":
+                ex = (msg.get("result") or {}).get("exposed_entities") or {}
+                exposed = {
+                    eid for eid, amap in ex.items()
+                    if isinstance(amap, dict) and any(amap.values())
+                }
+                break
+        return exposed
+    finally:
+        try:
+            s.close()
+        except Exception:
+            pass
+
+
+def get_exposed_entity_ids(use_cache: bool = True) -> set[str]:
+    """Entity_ids HA exposes to Assist. Cached; returns empty set on failure so
+    callers can treat 'empty' as 'no filter' (never a regression)."""
+    global _exposed_cache, _exposed_cache_ts
+    now = time.time()
+    if use_cache and _exposed_cache and (now - _exposed_cache_ts) < _EXPOSED_TTL:
+        return _exposed_cache
+    cfg = _get_ha_config()
+    if not cfg:
+        return _exposed_cache
+    try:
+        ids = _ws_fetch_exposed(cfg["url"], cfg["token"])
+        if ids:
+            _exposed_cache = ids
+            _exposed_cache_ts = now
+            logger.info({"event": "ha_exposed_refreshed", "count": len(ids)})
+        return _exposed_cache
+    except Exception as exc:
+        logger.warning({"event": "ha_exposed_failed", "error": str(exc)[:120]})
+        return _exposed_cache  # stale or empty → caller skips filter
+
+
 def get_state(entity_id: str) -> dict[str, Any] | None:
     """Fetch a single entity's state."""
     cfg = _get_ha_config()
@@ -183,6 +296,10 @@ def _refresh_context() -> None:
         _context_cache = _build_context(states)
         _context_cache_ts = time.time()
         logger.info({"event": "ha_context_refreshed", "devices": len(states)})
+        try:
+            get_exposed_entity_ids(use_cache=False)  # keep Assist-exposed set warm
+        except Exception:
+            pass
     except Exception as exc:
         logger.warning({"event": "ha_context_refresh_failed", "error": str(exc)})
 
