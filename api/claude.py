@@ -29,12 +29,13 @@ real cookie and adjust the completion path / _parse_stream event shapes if neede
 
 from __future__ import annotations
 
+import base64
 import json
 import time
 import uuid
 from typing import Any, Iterator
 
-from curl_cffi import requests
+from curl_cffi import requests, CurlMime
 from fastapi import APIRouter, Header, HTTPException
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import StreamingResponse
@@ -193,6 +194,39 @@ def _flatten_messages(messages: list[dict[str, Any]]) -> str:
     return "\n\n".join(parts)
 
 
+_IMG_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
+            "image/gif": "gif", "image/webp": "webp"}
+
+
+def _extract_images(messages: list[dict[str, Any]]) -> list[tuple[bytes, str]]:
+    """Pull (bytes, mime) for every OpenAI `image_url` part (data: URI or http URL)."""
+    out: list[tuple[bytes, str]] = []
+    for msg in messages or []:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            continue
+        for p in content:
+            if not isinstance(p, dict) or p.get("type") != "image_url":
+                continue
+            url = str(((p.get("image_url") or {}).get("url") or "")).strip()
+            if url.startswith("data:"):
+                try:
+                    head, b64 = url.split(",", 1)
+                    mime = (head[5:].split(";")[0] or "image/png").lower()
+                    out.append((base64.b64decode(b64), mime))
+                except Exception:
+                    pass
+            elif url.startswith("http"):
+                try:
+                    rr = requests.get(url, timeout=20, impersonate="chrome110")
+                    if rr.status_code == 200 and rr.content:
+                        mime = (rr.headers.get("content-type") or "image/png").split(";")[0].lower()
+                        out.append((rr.content, mime))
+                except Exception:
+                    pass
+    return out
+
+
 def _collect_text(chunks: Iterator[dict[str, Any]]) -> str:
     """Drain an OpenAI-chunk iterator into the full assistant text. Blocking —
     call via run_in_threadpool so claude.ai's network reads don't stall the loop."""
@@ -300,6 +334,25 @@ class ClaudeFreeBackend:
         except Exception:
             return conv
 
+    def _upload_image(self, org_id: str, data: bytes, mime: str) -> str:
+        """Upload one image to claude.ai (POST /api/{org}/upload, multipart),
+        returning its file_uuid for the completion `files` field (or '')."""
+        s = self.session
+        ct = s.headers.pop("Content-Type", None)  # multipart must set its own
+        try:
+            mp = CurlMime()
+            ext = _IMG_EXT.get(mime, "png")
+            mp.addpart(name="file", filename=f"image.{ext}", content_type=mime, data=data)
+            resp = s.post(f"{_base_url()}/api/{org_id}/upload", multipart=mp, timeout=60)
+            if resp.status_code == 200:
+                return str((resp.json() or {}).get("file_uuid") or "")
+            _logger().warning({"event": "claude_upload_failed", "status": resp.status_code, "body": resp.text[:160]})
+        except Exception as exc:
+            _logger().warning({"event": "claude_upload_error", "error": str(exc)})
+        finally:
+            s.headers["Content-Type"] = ct or "application/json"
+        return ""
+
     def _conversation_get(self, org_id: str) -> str:
         """Reuse one conversation across requests (each completion is parented
         at ROOT, so no history bleed) — saves a create round-trip per chat.
@@ -317,12 +370,21 @@ class ClaudeFreeBackend:
         org_id = self._org_id_get()
         internal_model = _resolve_model(model)
 
+        # Vision: upload any image_url parts and reference them by file_uuid.
+        file_uuids: list[str] = []
+        for data, mime in _extract_images(messages):
+            fu = self._upload_image(org_id, data, mime)
+            if fu:
+                file_uuids.append(fu)
+        if file_uuids:
+            _logger().info({"event": "claude_images", "count": len(file_uuids)})
+
         payload: dict[str, Any] = {
             "prompt": _flatten_messages(messages),
             "parent_message_uuid": ROOT_PARENT_UUID,
             "timezone": str(_claude_cfg().get("timezone") or "Asia/Ho_Chi_Minh"),
             "attachments": [],
-            "files": [],
+            "files": file_uuids,
             "sync_sources": [],
             "rendering_mode": "messages",
         }
