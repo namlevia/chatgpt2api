@@ -1216,7 +1216,10 @@ def _prefetch_ha_context_if_needed(
     
     try:
         from services.ha_client import get_states
-        states = get_states()
+        # Real-time: a status query must reflect the CURRENT state, not the
+        # hourly cache. Fetch fresh (refreshes the shared cache too, so the
+        # exposed-only block below reuses it without a second HA call).
+        states = get_states(use_cache=False)
         if states:
             # Score each entity by how many search words it matches
             matched_entities = []
