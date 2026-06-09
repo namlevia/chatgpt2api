@@ -641,6 +641,29 @@ class OpenAIBackendAPI:
         image = Image.open(BytesIO(data))
         width, height = image.size
         mime_type = Image.MIME.get(image.format, "image/png")
+        # Speed: cap the longest side before upload. Camera/phone frames are often
+        # 1920–4000px; OpenAI vision processes images in 512px tiles, so shrinking
+        # means far fewer tiles → much faster analysis, plus a smaller/faster upload.
+        # 1024 is plenty for person-detection / general description; tune via config
+        # key "chatgpt_vision_max_dim" (set 0 to disable).
+        try:
+            max_dim = int(config.data.get("chatgpt_vision_max_dim", 1024) or 0)
+        except Exception:
+            max_dim = 1024
+        if max_dim and max(width, height) > max_dim:
+            scale = max_dim / float(max(width, height))
+            new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
+            resized = image.convert("RGB") if image.mode not in ("RGB", "L") else image
+            resized = resized.resize(new_size, Image.LANCZOS)
+            buf = BytesIO()
+            resized.save(buf, format="JPEG", quality=85)
+            new_data = buf.getvalue()
+            logger.info({"event": "chatgpt_image_downscaled", "from": [width, height],
+                         "to": list(new_size), "bytes": [len(data), len(new_data)]})
+            data, (width, height) = new_data, new_size
+            mime_type = "image/jpeg"
+            if "." in file_name:
+                file_name = file_name.rsplit(".", 1)[0] + ".jpg"
         path = "/backend-api/files"
         response = self.session.post(
             self.base_url + path,
@@ -651,7 +674,6 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, path)
         upload_meta = response.json()
-        time.sleep(0.5)
         response = self.session.put(
             upload_meta["upload_url"],
             headers={
