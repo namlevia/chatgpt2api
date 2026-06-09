@@ -973,18 +973,26 @@ def conversation_events(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any = None,
 ) -> Iterator[dict[str, Any]]:
-    # Web search opt-in via a "-search"/"-websearch" model suffix. The slug is
-    # sent verbatim to chatgpt.com, so strip the suffix here and instead request
-    # the search tool via system_hints (parallel to picture_v2 for images).
+    # Web search: default ON (the model itself decides when to actually search,
+    # so simple prompts stay fast). A "-search"/"-websearch" suffix forces it on,
+    # "-nosearch" forces it off; config.chatgpt_web_search=false disables the
+    # default. The slug is sent verbatim to chatgpt.com so the suffix is stripped
+    # here and search is requested via system_hints (parallel to picture_v2).
+    # Never enabled for image gen or tool/function-calling requests.
     model = str(model or "auto").strip()
-    want_search = False
-    for _sfx in ("-search", "-websearch"):
-        if model.endswith(_sfx):
-            model = model[: -len(_sfx)] or "auto"
-            want_search = True
-            break
+    search_pref: bool | None = None
+    if model.endswith("-nosearch"):
+        model, search_pref = (model[:-9] or "auto"), False
+    elif model.endswith("-websearch"):
+        model, search_pref = (model[:-10] or "auto"), True
+    elif model.endswith("-search"):
+        model, search_pref = (model[:-7] or "auto"), True
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []), tools=tools, tool_choice=tool_choice)
     image_model = model in IMAGE_MODELS
+    if search_pref is None:
+        _ws = config.data.get("chatgpt_web_search")
+        search_pref = True if _ws is None else bool(_ws)
+    want_search = search_pref and not image_model and not tools
 
     if not image_model:
         last_user_text = ""
