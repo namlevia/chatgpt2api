@@ -247,27 +247,6 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     # that vision models have to scan before answering).
     is_vision_request = _messages_have_images(messages)
 
-    # TEMP DEBUG: inspect the exact message layout of a vision request so we can
-    # safely strip "side" prompts (assistant persona / device block) and keep
-    # only the automation's task prompt + image. Remove after analysis.
-    if is_vision_request:
-        try:
-            _dbg = []
-            for _m in messages or []:
-                _c = _m.get("content", "")
-                if isinstance(_c, list):
-                    _txt = " ".join(str(p.get("text", "")) for p in _c
-                                    if isinstance(p, dict) and p.get("type") == "text")
-                    _imgs = sum(1 for p in _c if isinstance(p, dict)
-                                and p.get("type") in ("image_url", "input_image", "image"))
-                else:
-                    _txt, _imgs = str(_c), 0
-                _dbg.append({"role": _m.get("role"), "chars": len(_txt),
-                             "imgs": _imgs, "preview": _txt[:150]})
-            logger.info({"event": "vision_payload_debug", "messages": _dbg})
-        except Exception:
-            pass
-
     # Detect HA intent on the PRISTINE user message before any search/HA
     # injection runs. Search results often contain phrases like "mở cửa"
     # (trading session jargon) or "đèn" (news headline) that would trip

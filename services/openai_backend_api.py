@@ -647,9 +647,9 @@ class OpenAIBackendAPI:
         # 1024 is plenty for person-detection / general description; tune via config
         # key "chatgpt_vision_max_dim" (set 0 to disable).
         try:
-            max_dim = int(config.data.get("chatgpt_vision_max_dim", 1024) or 0)
+            max_dim = int(config.data.get("chatgpt_vision_max_dim", 768) or 0)
         except Exception:
-            max_dim = 1024
+            max_dim = 768
         if max_dim and max(width, height) > max_dim:
             scale = max_dim / float(max(width, height))
             new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
