@@ -155,10 +155,16 @@ def _resolve_model(model: str) -> str:
             m = m[len(pfx):].strip()
             break
     
-    # Strip effort and thinking suffixes
-    for sfx in ("-low", "-medium", "-high", "-max", "-thinking", "-think"):
-        if m.endswith(sfx):
-            m = m[:-len(sfx)]
+    # Strip effort / thinking / web-search suffixes (may be chained, e.g.
+    # "-thinking-search") so the base model still resolves.
+    _sfxs = ("-search", "-websearch", "-low", "-medium", "-high", "-max", "-thinking", "-think")
+    stripped = True
+    while stripped:
+        stripped = False
+        for sfx in _sfxs:
+            if m.endswith(sfx):
+                m = m[:-len(sfx)]
+                stripped = True
     
     if not m or m == "auto":
         m = str(_claude_cfg().get("model") or "").strip()
@@ -405,6 +411,11 @@ class ClaudeFreeBackend:
             if effort:
                 payload["output_config"] = {"effort": effort}
 
+        # Web search: opt-in via "-search"/"-websearch" model suffix or the
+        # providers.claude.web_search config flag (claude.ai free supports it).
+        if "-search" in raw_m or "-websearch" in raw_m or bool(_claude_cfg().get("web_search")):
+            payload["tools"] = [{"type": "web_search_v0", "name": "web_search"}]
+
         _logger().info({"event": "claude_request", "model": internal_model or "auto", "msg_count": len(messages or [])})
 
         # Reuse the cached conversation; a stale/expired one 4xx's, so drop it
@@ -549,11 +560,12 @@ def create_router() -> APIRouter:
     async def claude_models(authorization: str | None = Header(default=None)):
         from api.support import require_identity
         require_identity(authorization)
-        ids = ["claude/auto", "claude/sonnet-4.5"]
+        ids = ["claude/auto", "claude/auto-search", "claude/sonnet-4.5", "claude/sonnet-4.5-search"]
         for b in ["sonnet-4.6", "opus-4.8", "haiku-4.5"]:
             for e in ["", "-medium", "-high", "-max"]:
                 for t in ["", "-thinking"]:
                     ids.append(f"claude/{b}{e}{t}")
+        # Any model also accepts a trailing "-search" to enable web search.
         return {
             "object": "list",
             "data": [{"id": i, "object": "model", "owned_by": "claude"} for i in ids],
