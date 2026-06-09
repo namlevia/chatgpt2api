@@ -944,8 +944,18 @@ def conversation_events(
     tools: list[dict[str, Any]] | None = None,
     tool_choice: Any = None,
 ) -> Iterator[dict[str, Any]]:
+    # Web search opt-in via a "-search"/"-websearch" model suffix. The slug is
+    # sent verbatim to chatgpt.com, so strip the suffix here and instead request
+    # the search tool via system_hints (parallel to picture_v2 for images).
+    model = str(model or "auto").strip()
+    want_search = False
+    for _sfx in ("-search", "-websearch"):
+        if model.endswith(_sfx):
+            model = model[: -len(_sfx)] or "auto"
+            want_search = True
+            break
     normalized = normalize_messages(messages or ([{"role": "user", "content": prompt}] if prompt else []), tools=tools, tool_choice=tool_choice)
-    image_model = str(model or "").strip() in IMAGE_MODELS
+    image_model = model in IMAGE_MODELS
 
     if not image_model:
         last_user_text = ""
@@ -967,7 +977,7 @@ def conversation_events(
         model=model,
         prompt=final_prompt,
         images=images if image_model else None,
-        system_hints=["picture_v2"] if image_model else None,
+        system_hints=(["picture_v2"] if image_model else (["search"] if want_search else None)),
         tools=tools,
         tool_choice=tool_choice,
     )
