@@ -376,15 +376,15 @@ class ClaudeFreeBackend:
         org_id = self._org_id_get()
         internal_model = _resolve_model(model)
 
-        # Home Assistant: for smart-home questions inject the live device state
-        # as context so Claude can answer (read-only — device control needs
-        # function calling, only on the paid path). Reuses the ChatGPT HA
-        # integration; no-op when HA is unconfigured or the query isn't HA.
+        # Home Assistant: for smart-home questions prefetch the LIVE device
+        # state and inject a compact summary so Claude can answer (read-only —
+        # device control needs function calling, only on the paid path). Reuses
+        # the ChatGPT free prefetch; no-op when HA is unconfigured or non-HA.
         try:
-            from services.ha_client import inject_ha_context
-            messages = inject_ha_context(messages)
-        except Exception:
-            pass
+            from services.protocol.openai_v1_chat_complete import _prefetch_ha_context_if_needed
+            messages = _prefetch_ha_context_if_needed(messages, None, "")
+        except Exception as _ha_exc:
+            _logger().debug({"event": "claude_ha_prefetch_skipped", "error": str(_ha_exc)[:120]})
 
         # Vision: upload any image_url parts and reference them by file_uuid.
         file_uuids: list[str] = []
