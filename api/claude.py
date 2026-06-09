@@ -376,6 +376,16 @@ class ClaudeFreeBackend:
         org_id = self._org_id_get()
         internal_model = _resolve_model(model)
 
+        # Home Assistant: for smart-home questions inject the live device state
+        # as context so Claude can answer (read-only — device control needs
+        # function calling, only on the paid path). Reuses the ChatGPT HA
+        # integration; no-op when HA is unconfigured or the query isn't HA.
+        try:
+            from services.ha_client import inject_ha_context
+            messages = inject_ha_context(messages)
+        except Exception:
+            pass
+
         # Vision: upload any image_url parts and reference them by file_uuid.
         file_uuids: list[str] = []
         for data, mime in _extract_images(messages):
