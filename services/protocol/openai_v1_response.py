@@ -206,13 +206,24 @@ def response_events(body: dict[str, Any]) -> Iterator[dict[str, Any]]:
         images = encode_images([(image_data, "image.png", mime_type)])
     else:
         images = None
-    image_outputs = stream_image_outputs_with_pool(ConversationRequest(
-        prompt=prompt,
-        model=model,
-        size=size,
-        response_format="b64_json",
-        images=images,
-    ))
+    from services.protocol.openai_v1_image_generations import handle as handle_image_gen
+    from services.protocol.conversation import ImageOutput
+
+    try:
+        # Call the unified image generation router instead of hardcoding ChatGPT's flow
+        img_result = handle_image_gen({
+            "prompt": prompt,
+            "model": model,
+            "n": 1,
+            "size": size,
+            "response_format": "b64_json"
+        })
+        # Mock an ImageOutput of kind "result" so stream_image_response can process it
+        data = img_result.get("data") or []
+        image_outputs = [ImageOutput(kind="result", model=model, index=1, total=1, data=data)]
+    except Exception as exc:
+        image_outputs = [ImageOutput(kind="message", model=model, index=1, total=1, text=f"Image generation failed: {exc}")]
+        
     yield from stream_image_response(image_outputs, prompt, model)
 
 
