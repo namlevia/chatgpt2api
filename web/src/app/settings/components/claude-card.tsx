@@ -64,10 +64,12 @@ export function ClaudeCard() {
   async function fetchCfg() {
     try {
       const data = await request.get("/api/settings");
-      const flow = ((data.data as any)?.config?.providers || {}).flow || {};
+      const provs = ((data.data as any)?.config?.providers || {});
+      const flow = provs.flow || {};
+      const claude = provs.claude || {};
       setCs({
-        url: flow.captcha_solver_url || "http://172.16.10.38:8010",
-        apiKey: flow.captcha_solver_api_key || "",
+        url: claude.captcha_solver_url || flow.captcha_solver_url || "http://172.16.10.38:8010",
+        apiKey: claude.captcha_solver_api_key || flow.captcha_solver_api_key || "",
       });
     } catch (e) {
       console.error(e);

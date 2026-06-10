@@ -79,8 +79,8 @@ export function GeminiWebCard() {
       const flow = cfg.flow || {};
       const gemw = cfg.gemini_web || {};
       setCs({
-        url: flow.captcha_solver_url || "http://172.16.10.38:8010",
-        apiKey: flow.captcha_solver_api_key || "",
+        url: gemw.captcha_solver_url || flow.captcha_solver_url || "http://172.16.10.38:8010",
+        apiKey: gemw.captcha_solver_api_key || flow.captcha_solver_api_key || "",
       });
       setProfile(gemw.profile || "gemini-web-default");
       setTimeoutVal(Number(gemw.timeout) || 120);

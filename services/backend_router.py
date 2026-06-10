@@ -25,6 +25,7 @@ PROVIDER_PREFIXES: dict[str, str] = {
     "chatgpt/codex/": "openai_oauth",  # legacy alias — keep BEFORE chatgpt/
     "chatgpt/free/": "chatgpt_free",   # legacy alias — keep BEFORE chatgpt/
     "chatgpt/": "chatgpt_free",   # legacy alias → unified free module
+    "cgw/": "chatgpt_web",        # chatgpt web provider (captcha solver)
     "paid/": "openai_oauth",   # plus/go/business — unified under Codex OAuth
     "cx/": "openai_oauth",
     "codex/": "openai_oauth",

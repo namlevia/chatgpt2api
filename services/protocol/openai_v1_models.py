@@ -36,6 +36,15 @@ FALLBACK_MODELS = {
         "chatgpt/o3-mini",
         "chatgpt/o4-mini",
     ],
+    "chatgpt_web": [
+        "cgw/auto",
+        "cgw/gpt-4.1-mini",
+        "cgw/gpt-4.1-nano",
+        "cgw/gpt-4o",
+        "cgw/gpt-4o-mini",
+        "cgw/o3-mini",
+        "cgw/o4-mini",
+    ],
     "openai_oauth": [
         "cx/auto",
         # GPT 5.5
