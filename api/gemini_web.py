@@ -164,6 +164,19 @@ def _drop_client(psid: str) -> None:
 
 # ── Model & message helpers ──────────────────────────────────────────────────
 
+# Tên thân thiện theo UI Gemini (3.5 Flash / 3.1 Pro + Tiêu chuẩn/Mở rộng) →
+# model_name nội bộ của gemini_webapi. "Mở rộng" = tier advanced (tư duy sâu).
+# Lib KHÔNG có model "Flash-Lite" riêng → map về flash. Tên lib gốc vẫn route OK.
+_GMA_ALIASES = {
+    "flash": "gemini-3-flash",                      # 3.5 Flash (Tiêu chuẩn)
+    "flash-lite": "gemini-3-flash",                 # UI Flash-Lite (lib chưa tách)
+    "flash-thinking": "gemini-3-flash-thinking",    # Flash kèm suy luận
+    "flash-extended": "gemini-3-flash-advanced",    # 3.5 Flash (Mở rộng)
+    "pro": "gemini-3-pro",                          # 3.1 Pro (Tiêu chuẩn)
+    "pro-extended": "gemini-3-pro-advanced",        # 3.1 Pro (Mở rộng)
+}
+
+
 def _resolve_model(model: str):
     """alias → gemini_webapi Model enum; None = để server tự chọn."""
     m = str(model or "").strip().lower()
@@ -175,6 +188,10 @@ def _resolve_model(model: str):
         m = str(_cfg().get("model") or "").strip().lower()
     if not m or m == "auto":
         return None
+    # UI-friendly alias → lib model_name. The lib labels models "gemini-3-*"
+    # while the Gemini UI shows "3.5 Flash / 3.1 Pro" + thinking Tiêu chuẩn(基)
+    # /Mở rộng(advanced). Map both so a HA/app pick matches what the user sees.
+    m = _GMA_ALIASES.get(m, m)
     try:
         from gemini_webapi.constants import Model
         return Model.from_name(m)
