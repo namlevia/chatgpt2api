@@ -226,6 +226,135 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
     yield completion_chunk(model, {}, "stop", completion_id, created)
 
 
+# ---------------------------------------------------------------------------
+# Pipeline combo — kiểu Aider architect/editor: "bố" (model mạnh) lập kế hoạch
+# ngắn, "con" (model rẻ/nhanh) viết code dài theo kế hoạch → tiết kiệm 30-50%
+# token đầu ra của model đắt. Tạo bằng UI combo sẵn có, không cần UI mới:
+# combo nào có entry "architect:<model>" sẽ chạy pipeline; entry
+# "editor:<model>" (hoặc entry trần) là chuỗi fallback cho tầng thực thi.
+# Ví dụ combo "code": ["architect:claude/auto", "editor:cgf/auto", "nv/..."]
+
+_PIPELINE_ARCHITECT_PROMPT = (
+    "Bạn là kiến trúc sư trưởng (architect). Phân tích yêu cầu và lập KẾ HOẠCH "
+    "triển khai NGẮN GỌN cho một lập trình viên thực thi: liệt kê các bước, "
+    "file/hàm cần sửa, thuật toán, edge case cần xử lý. KHÔNG viết code đầy đủ "
+    "— chỉ mô tả và pseudo-code khi thật cần. Trả lời bằng ngôn ngữ của người "
+    "dùng, tối đa 400 từ."
+)
+
+_PIPELINE_EDITOR_PROMPT = (
+    "Bạn là lập trình viên thực thi (editor). Kiến trúc sư trưởng đã duyệt kế "
+    "hoạch dưới đây cho yêu cầu của người dùng. Hãy triển khai CHÍNH XÁC theo "
+    "kế hoạch, xuất code hoàn chỉnh chạy được, không hỏi lại, không bàn thêm "
+    "phương án khác.\n\n=== KẾ HOẠCH ĐÃ DUYỆT ===\n{plan}\n=== HẾT KẾ HOẠCH ==="
+)
+
+_PIPELINE_PLAN_MAX_CHARS = 8000
+
+
+def _parse_pipeline_combo(combo_entries: list[str]) -> tuple[list[str], list[str]] | None:
+    """Tách combo thành (architects, editors); None nếu là combo fallback thường."""
+    architects: list[str] = []
+    editors: list[str] = []
+    for entry in combo_entries:
+        s = str(entry or "").strip()
+        low = s.lower()
+        if low.startswith("architect:"):
+            m = s.split(":", 1)[1].strip()
+            if m:
+                architects.append(m)
+        elif low.startswith("editor:"):
+            m = s.split(":", 1)[1].strip()
+            if m:
+                editors.append(m)
+        elif s:
+            editors.append(s)
+    if architects and editors:
+        return (architects, editors)
+    return None
+
+
+def _pipeline_extract_content(result: Any) -> str:
+    if isinstance(result, dict):
+        try:
+            choices = result.get("choices") or []
+            msg = choices[0].get("message") or {}
+            return str(msg.get("content") or "")
+        except Exception:
+            return ""
+    try:
+        return collect_chat_content(result)
+    except Exception:
+        return ""
+
+
+def _run_pipeline_combo(
+    combo_name: str,
+    architects: list[str],
+    editors: list[str],
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    tool_choice: Any,
+    body: dict[str, Any],
+) -> dict[str, Any] | Iterator[dict[str, Any]]:
+    # ---- Tầng 1: architect (bố) — non-stream, không tool, chỉ lập plan ----
+    plan = ""
+    plan_model = ""
+    arch_body = dict(body)
+    arch_body["stream"] = False
+    arch_messages = [{"role": "system", "content": _PIPELINE_ARCHITECT_PROMPT}] + list(messages)
+    for am in architects:
+        try:
+            route = backend_router.route(am)
+            cooldown = model_cooldown.get_cooldown_info(route.model)
+            if cooldown:
+                logger.warning({"event": "pipeline_architect_cooldown", "combo": combo_name, "model": am, **cooldown})
+                continue
+            logger.info({"event": "pipeline_architect_try", "combo": combo_name, "provider": route.provider, "model": route.model})
+            result = _dispatch(route, arch_messages, None, None, arch_body)
+            content = _pipeline_extract_content(result).strip()
+            if content:
+                plan = content[:_PIPELINE_PLAN_MAX_CHARS]
+                plan_model = am
+                model_cooldown.record_success("pipeline:" + combo_name, route.model)
+                logger.info({"event": "pipeline_architect_ok", "combo": combo_name, "model": am, "plan_chars": len(plan)})
+                break
+        except Exception as exc:
+            logger.warning({"event": "pipeline_architect_fail", "combo": combo_name, "model": am, "error": str(exc)[:200]})
+            continue
+
+    # ---- Tầng 2: editor (con) — stream theo client, fallback chain ----
+    editor_messages = list(messages)
+    if plan:
+        editor_messages.append({"role": "system", "content": _PIPELINE_EDITOR_PROMPT.format(plan=plan)})
+    else:
+        # Tất cả architect chết → degrade về gọi thẳng editor, không hard-fail
+        logger.warning({"event": "pipeline_no_plan", "combo": combo_name, "architects": architects})
+
+    last_error = ""
+    for em in editors:
+        try:
+            route = backend_router.route(em)
+            cooldown = model_cooldown.get_cooldown_info(route.model)
+            if cooldown:
+                last_error = cooldown["message"]
+                logger.warning({"event": "pipeline_editor_cooldown", "combo": combo_name, "model": em, **cooldown})
+                continue
+            logger.info({"event": "pipeline_editor_try", "combo": combo_name, "provider": route.provider, "model": route.model, "has_plan": bool(plan), "architect": plan_model})
+            result = _dispatch(route, editor_messages, tools, tool_choice, body)
+            model_cooldown.record_success("pipeline:" + combo_name, route.model)
+            return result
+        except Exception as exc:
+            last_error = str(exc)
+            logger.warning({"event": "pipeline_editor_fail", "combo": combo_name, "model": em, "error": last_error[:200]})
+            model_cooldown.record_failure(
+                account_id="pipeline:" + combo_name, model=em,
+                status_code=_extract_status(last_error), error_body=last_error, provider="",
+            )
+            continue
+    return completion_response(model=combo_name, content=f"All pipeline editors failed. Last error: {last_error[:200]}", messages=messages)
+
+
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     try:
         import json
@@ -261,6 +390,12 @@ def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
 
     # Check if this is a combo model — try each model until success
     if backend_router.is_combo(model):
+        # Pipeline combo (architect/editor): combo có entry "architect:<model>"
+        # chạy 2 tầng bố-con thay vì fallback chain thường.
+        _combo_entries = backend_router._get_combo_models(model) or []
+        _pipeline = _parse_pipeline_combo(_combo_entries)
+        if _pipeline:
+            return _run_pipeline_combo(model, _pipeline[0], _pipeline[1], messages, tools, tool_choice, body)
         routes = backend_router.route_combo(model)
         last_error = ""
 
