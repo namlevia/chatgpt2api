@@ -168,10 +168,16 @@ export function GeminiWebCard() {
               const cur = await request.get("/api/settings");
               const config = (cur.data as any)?.config || {};
               config.providers = config.providers || {};
+              const geminiWeb = config.providers.gemini_web || {};
+              const accounts = Array.isArray(geminiWeb.accounts) ? [...geminiWeb.accounts] : [];
+              if (!accounts.some((a: any) => a.profile === prof)) {
+                accounts.push({ profile: prof, label: prof });
+              }
               config.providers.gemini_web = {
-                ...(config.providers.gemini_web || {}),
+                ...geminiWeb,
                 enabled: true,
-                profile: prof,
+                profile: prof, // Keep legacy field for fallback
+                accounts,
               };
               await request.put("/api/settings", { config });
               toast.success(`Gemini Web dùng profile ${prof} ✓`);

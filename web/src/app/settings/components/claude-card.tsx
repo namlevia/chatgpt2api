@@ -90,12 +90,19 @@ export function ClaudeCard() {
     const cur = await request.get("/api/settings");
     const config = (cur.data as any)?.config || {};
     config.providers = config.providers || {};
+    const currentProfiles = Array.isArray(config.providers.claude?.profiles) 
+      ? config.providers.claude.profiles 
+      : (config.providers.claude?.profile ? [config.providers.claude.profile] : []);
+    if (!currentProfiles.includes(prof)) {
+      currentProfiles.push(prof);
+    }
+
     config.providers.claude = {
       ...(config.providers.claude || {}),
       enabled: true,
       captcha_solver_url: cs.url,
       captcha_solver_api_key: cs.apiKey,
-      profiles: [prof],
+      profiles: currentProfiles,
       model: config.providers.claude?.model || "auto",
     };
     await request.put("/api/settings", { config });
