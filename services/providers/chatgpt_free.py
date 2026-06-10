@@ -99,17 +99,31 @@ def handle_free_chat(
         try:
             from services.config import config as _config
             ms = _config.data.get("model_settings") or {}
-            enabled = (ms.get("enabled_models") or {}).get("ChatGPT_free")
-            if not enabled:
-                enabled = (ms.get("enabled_models") or {}).get("chatgpt_free")
-            if isinstance(enabled, list):
-                for m in enabled:
-                    m = str(m).strip()
-                    if m.startswith("cgf/"):
-                        m = m[4:]
-                    if m and m not in ("auto", "research"):
-                        model = m
-                        break
+            
+            # First check explicit default_models
+            default_model = (ms.get("default_models") or {}).get("ChatGPT_free")
+            if not default_model:
+                default_model = (ms.get("default_models") or {}).get("chatgpt_free")
+            if default_model:
+                m = str(default_model).strip()
+                if m.startswith("cgf/"):
+                    m = m[4:]
+                if m and m != "auto":
+                    model = m
+            
+            # Fallback to first enabled model if no default set
+            if model == "auto":
+                enabled = (ms.get("enabled_models") or {}).get("ChatGPT_free")
+                if not enabled:
+                    enabled = (ms.get("enabled_models") or {}).get("chatgpt_free")
+                if isinstance(enabled, list):
+                    for m in enabled:
+                        m = str(m).strip()
+                        if m.startswith("cgf/"):
+                            m = m[4:]
+                        if m and m not in ("auto", "research"):
+                            model = m
+                            break
         except Exception:
             pass
 

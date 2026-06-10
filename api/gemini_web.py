@@ -229,6 +229,18 @@ def _resolve_model(model: str):
             m = m[len(pfx):]
             break
     if not m or m == "auto":
+        try:
+            from services.config import config as _config
+            ms = _config.data.get("model_settings") or {}
+            default_model = (ms.get("default_models") or {}).get("gemini_web_api")
+            if default_model:
+                m = str(default_model).strip()
+                if m.startswith("gma/"):
+                    m = m[4:]
+        except Exception:
+            pass
+
+    if not m or m == "auto":
         m = str(_cfg().get("model") or "").strip().lower()
     if not m or m == "auto":
         return None
