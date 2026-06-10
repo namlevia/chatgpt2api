@@ -40,7 +40,7 @@ export function ChatGPTWebCard() {
         profile: profile.trim() || "chatgpt-default",
         timeout: Math.max(30, Math.min(600, timeout)),
       };
-      await request.put("/api/settings", { config });
+      await request.post("/api/settings", { config });
       toast.success("Đã lưu config ChatGPT Web");
     } catch (e: any) {
       toast.error(`Save fail: ${e?.message || e}`);
