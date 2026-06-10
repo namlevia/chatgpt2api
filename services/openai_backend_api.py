@@ -469,12 +469,34 @@ class OpenAIBackendAPI:
                 continue
             if not self.access_token:
                 raise RuntimeError("authenticated upstream account required for image input")
-            uploaded: list[Dict[str, Any]] = []
-            for idx, (data, mime) in enumerate(image_inputs, start=1):
+            def _prep_upload(idx: int, data: bytes, mime: str) -> tuple[str, str]:
                 ext_part = mime.split("/", 1)[1].split("+")[0] if "/" in mime else "png"
                 extension = "jpg" if ext_part == "jpeg" else (ext_part or "png")
                 b64 = base64.b64encode(data).decode("ascii")
-                uploaded.append(self._upload_image(f"data:{mime};base64,{b64}", f"image_{idx}.{extension}"))
+                return f"data:{mime};base64,{b64}", f"image_{idx}.{extension}"
+
+            uploaded: list[Dict[str, Any]] = []
+            if len(image_inputs) > 1:
+                # Camera automations send a burst of frames; upload them in
+                # parallel (each on its own cloned Session — curl_cffi handles
+                # are not thread-safe). pool.map preserves frame order.
+                def _upload_one(pair: tuple[int, tuple[bytes, str]]) -> Dict[str, Any]:
+                    idx, (data, mime) = pair
+                    image_b64, fname = _prep_upload(idx, data, mime)
+                    sess = self._clone_session()
+                    try:
+                        return self._upload_image(image_b64, fname, sess=sess)
+                    finally:
+                        try:
+                            sess.close()
+                        except Exception:
+                            pass
+                with ThreadPoolExecutor(max_workers=min(3, len(image_inputs))) as pool:
+                    uploaded = list(pool.map(_upload_one, enumerate(image_inputs, start=1)))
+            else:
+                for idx, (data, mime) in enumerate(image_inputs, start=1):
+                    image_b64, fname = _prep_upload(idx, data, mime)
+                    uploaded.append(self._upload_image(image_b64, fname))
             parts: list[Any] = []
             for ref in uploaded:
                 parts.append({
@@ -625,8 +647,30 @@ class OpenAIBackendAPI:
         payload = image.split(",", 1)[1] if image.startswith("data:") and "," in image else image
         return base64.b64decode(payload)
 
-    def _upload_image(self, image: str, file_name: str = "image.png") -> Dict[str, Any]:
+    def _clone_session(self):
+        """New Session with this client's fingerprint/headers/cookies.
+
+        curl_cffi Sessions are NOT safe for concurrent use from multiple
+        threads (single curl handle), so parallel uploads each get a clone.
+        """
+        s = requests.Session(**proxy_settings.build_session_kwargs(
+            impersonate=self.fp["impersonate"],
+            verify=True,
+        ))
+        s.headers.update(dict(self.session.headers))
+        try:
+            for c in self.session.cookies.jar:
+                s.cookies.set(c.name, c.value, domain=c.domain, path=c.path)
+        except Exception:
+            try:
+                s.cookies.update(self.session.cookies)
+            except Exception:
+                pass
+        return s
+
+    def _upload_image(self, image: str, file_name: str = "image.png", sess=None) -> Dict[str, Any]:
         """上传一张 base64 图片，返回底层文件元数据。"""
+        s = sess or self.session
         data = self._decode_image_base64(image)
         if (
                 image
@@ -647,9 +691,9 @@ class OpenAIBackendAPI:
         # 1024 is plenty for person-detection / general description; tune via config
         # key "chatgpt_vision_max_dim" (set 0 to disable).
         try:
-            max_dim = int(config.data.get("chatgpt_vision_max_dim", 768) or 0)
+            max_dim = int(config.data.get("chatgpt_vision_max_dim", 896) or 0)
         except Exception:
-            max_dim = 768
+            max_dim = 896
         if max_dim and max(width, height) > max_dim:
             scale = max_dim / float(max(width, height))
             new_size = (max(1, round(width * scale)), max(1, round(height * scale)))
@@ -665,7 +709,7 @@ class OpenAIBackendAPI:
             if "." in file_name:
                 file_name = file_name.rsplit(".", 1)[0] + ".jpg"
         path = "/backend-api/files"
-        response = self.session.post(
+        response = s.post(
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
             json={"file_name": file_name, "file_size": len(data), "use_case": "multimodal", "width": width,
@@ -674,7 +718,7 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, path)
         upload_meta = response.json()
-        response = self.session.put(
+        response = s.put(
             upload_meta["upload_url"],
             headers={
                 "Content-Type": mime_type,
@@ -691,7 +735,7 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, "image_upload")
         path = f"/backend-api/files/{upload_meta['file_id']}/uploaded"
-        response = self.session.post(
+        response = s.post(
             self.base_url + path,
             headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
             data="{}",
