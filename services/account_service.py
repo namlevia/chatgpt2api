@@ -352,6 +352,16 @@ class AccountService:
                                 continue
                         except Exception:
                             pass
+                    # Skip if recently failed advanced data analysis (within 6 hours)
+                    last_analysis_fail = account.get("last_analysis_failed_at")
+                    if last_analysis_fail:
+                        try:
+                            from datetime import datetime
+                            fail_dt = datetime.strptime(last_analysis_fail, "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - fail_dt).total_seconds() < 6 * 3600:
+                                continue
+                        except Exception:
+                            pass
                 return token
             return ""
 
@@ -368,6 +378,24 @@ class AccountService:
             next_item = dict(current)
             from datetime import datetime
             next_item["last_image_failed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            account = self._normalize_account(next_item)
+            if account is not None:
+                self._accounts[access_token] = account
+            self._save_accounts()
+
+    def mark_analysis_failed(self, access_token: str) -> None:
+        """Mark that this account failed advanced data analysis quota
+        so we skip it for future vision/image requests, but keep it at #1 for text.
+        """
+        if not access_token:
+            return
+        with self._lock:
+            current = self._accounts.get(access_token)
+            if current is None:
+                return
+            next_item = dict(current)
+            from datetime import datetime
+            next_item["last_analysis_failed_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             account = self._normalize_account(next_item)
             if account is not None:
                 self._accounts[access_token] = account
