@@ -391,6 +391,7 @@ async def start_chatgpt_onboard(
     email: str = "",
     password: str = "",
     totp_secret: str = "",
+    prefer_method: str = "auth",
     reuse_session: bool = False,
 ) -> ChatGPTOnboardSession:
     """Launch ChatGPT onboard in background. Returns immediately with initial state.
@@ -401,7 +402,7 @@ async def start_chatgpt_onboard(
     the original fresh-login behavior exactly."""
     # Derive 2FA path: Authenticator(TOTP) when a secret is saved, else fall
     # to device-tap (need_tap) — user approves "Yes, it's me" on their phone.
-    _prefer = "auth" if (totp_secret and totp_secret.strip()) else "tap"
+    _prefer = prefer_method or ("auth" if (totp_secret and totp_secret.strip()) else "tap")
     session = ChatGPTOnboardSession(
         profile=profile,
         email=email,

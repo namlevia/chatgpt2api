@@ -59,7 +59,7 @@ def submit_2fa_code(profile: str, code: str) -> bool:
     return True
 
 
-async def start_gemini_web_login(profile: str, email: str, password: str, totp_secret: str = "") -> GeminiWebLoginSession:
+async def start_gemini_web_login(profile: str, email: str, password: str, totp_secret: str = "", prefer_method: str = "auth") -> GeminiWebLoginSession:
     """Kick off background Gemini Web login.
 
     If the profile already has a valid Google session (from Flow or
@@ -76,6 +76,7 @@ async def start_gemini_web_login(profile: str, email: str, password: str, totp_s
         state="starting",
         message="Khởi tạo Chrome",
         totp_secret=totp_secret,
+        prefer_method=prefer_method,
     )
     _sessions[profile] = session
 
@@ -212,7 +213,7 @@ async def _run_inner(session: GeminiWebLoginSession, password: str) -> None:
             pre_consent = False
 
         if on_google and not pre_consent:
-            ok = await do_google_login_steps(session, page, ctx, password)
+            ok = await do_google_login_steps(session, page, ctx, password, session.prefer_method)
             if not ok:
                 return
 

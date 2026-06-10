@@ -152,6 +152,7 @@ async def start_claude_web_login(
     email: str,
     password: str,
     totp_secret: str = "",
+    prefer_method: str = "auth",
 ) -> ClaudeWebLoginSession:
     """Kick off background Claude Web login.
 
@@ -168,6 +169,7 @@ async def start_claude_web_login(
         state="starting",
         message="Khởi tạo Chrome",
         totp_secret=totp_secret,
+        prefer_method=prefer_method,
     )
     _sessions[profile] = session
 
@@ -314,7 +316,7 @@ async def _run_inner(session: ClaudeWebLoginSession, password: str) -> None:
                 except Exception:
                     has_email = False
                 if has_email:
-                    ok = await do_google_login_steps(session, auth_page, ctx, password)
+                    ok = await do_google_login_steps(session, auth_page, ctx, password, session.prefer_method)
                     if not ok:
                         return
                     await _pick_google_account(auth_page, session.email)
