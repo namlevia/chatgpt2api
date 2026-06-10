@@ -793,9 +793,19 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
             seen.add(mid)
             data.append({"id": mid, "object": "model", "created": 0, "owned_by": "claude"})
 
-    # Gemini web-cookie API models (gma/ — gemini.google.com qua 1PSID)
-    gma_models = ["gma/auto", "gma/gemini-3-flash", "gma/gemini-3-pro",
-                  "gma/gemini-3-flash-thinking"]
+    # Gemini web-cookie API models (gma/ — gemini.google.com qua 1PSID).
+    # Lấy ĐỘNG từ enum của gemini_webapi để luôn khớp lib (basic + plus/advanced
+    # = tư duy mở rộng, chỉ chạy nếu account trả phí). Fallback nếu lib lỗi.
+    gma_models = ["gma/auto"]
+    try:
+        from gemini_webapi.constants import Model as _GMModel
+        for _m in _GMModel:
+            nm = getattr(_m, "model_name", "")
+            if nm and nm != "unspecified":
+                gma_models.append(f"gma/{nm}")
+    except Exception:
+        gma_models += ["gma/gemini-3-flash", "gma/gemini-3-pro",
+                       "gma/gemini-3-flash-thinking"]
     for mid in gma_models:
         if mid not in seen:
             seen.add(mid)
