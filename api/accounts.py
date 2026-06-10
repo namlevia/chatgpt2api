@@ -355,24 +355,40 @@ def create_router() -> APIRouter:
         })
 
         # ── Claude accounts branch ──
+        # Read from the account_service pool (type="claude") so accounts
+        # added via the Accounts UI are visible here with ordinals + quota badges,
+        # exactly like ChatGPT Free accounts. Falls back to config profiles for
+        # backward compatibility when the pool is empty.
+        from services.account_service import GROUP_CLAUDE
+        claude_accounts = [a for a in accounts if account_group(a) == GROUP_CLAUDE]
         claude_cfg = providers_cfg.get("claude") or {}
-        # We always want Claude to show up in the accounts tab, even if 0 accounts.
-        claude_profiles = claude_cfg.get("profiles") if isinstance(claude_cfg.get("profiles"), list) else []
-        items = []
-        for idx, prof in enumerate(claude_profiles):
-            items.append({
+        claude_instances = []
+        for idx, acc in enumerate(claude_accounts):
+            last_quota = acc.get("last_quota_exhausted") or ""
+            last_quota_at = acc.get("last_quota_exhausted_at") or ""
+            last_img_fail = acc.get("last_image_failed_at") or ""
+            last_ana_fail = acc.get("last_analysis_failed_at") or ""
+            claude_instances.append({
                 "ordinal": idx + 1,
                 "is_primary": idx == 0,
-                "profile": str(prof),
-                "label": str(prof),
-                "enabled": True,
+                "access_token": acc.get("access_token") or "",
+                "email": acc.get("email") or "",
+                "label": acc.get("email") or acc.get("access_token", "")[:24],
+                "status": acc.get("status") or "active",
+                "success": int(acc.get("success") or 0),
+                "fail": int(acc.get("fail") or 0),
+                "last_used_at": acc.get("last_used_at") or "",
+                "last_quota_exhausted": last_quota,
+                "last_quota_exhausted_at": last_quota_at,
+                "last_image_failed_at": last_img_fail,
+                "last_analysis_failed_at": last_ana_fail,
             })
         tree.append({
             "provider": "Claude Web",
             "icon": "bot",
             "type": "claude",
-            "instances": items,
-            "total": len(items),
+            "instances": claude_instances,
+            "total": len(claude_instances),
             "captcha_solver_url": claude_cfg.get("captcha_solver_url") or "",
         })
 

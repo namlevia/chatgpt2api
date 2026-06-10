@@ -1383,16 +1383,38 @@ function AccountsPageContent() {
                         );
                       })}
 
-                      {/* Claude Web profile rows — each maps 1:1 to a
-                          `providers.claude.profiles[]` entry (a bare profile
-                          string). Onboarding happens in Settings → Claude card;
-                          here we list every logged-in profile with a delete
-                          action. When empty we show a hint linking to Settings. */}
+                      {/* Claude Web account rows — reads from account_service pool (type=claude).
+                          Each account shows ordinal #, status, email, quota badges, success/fail,
+                          and a delete action — same UX as ChatGPT Free accounts. */}
                       {provider.type === "claude" && (
                         provider.instances && provider.instances.length > 0 ? (
-                          provider.instances.map((inst: any) => (
-                            <div key={`claude:${inst.profile}`}>
+                          provider.instances.map((inst: any) => {
+                            const clStatus = inst.status || "active";
+                            const statusColor =
+                              clStatus === "active" ? "bg-gradient-to-br from-orange-500 to-amber-600"
+                              : clStatus === "error" ? "bg-gradient-to-br from-rose-500 to-red-600"
+                              : clStatus === "limited" ? "bg-gradient-to-br from-amber-400 to-orange-500"
+                              : "bg-slate-300";
+
+                            // Quota exhausted badges
+                            const clExhausted: string[] = [];
+                            if (inst.last_image_failed_at) {
+                              const at = inst.last_image_failed_at.split(" ")[1] || "gần đây";
+                              clExhausted.push(`Gửi ảnh lúc ${at}`);
+                            }
+                            if (inst.last_analysis_failed_at) {
+                              const at = inst.last_analysis_failed_at.split(" ")[1] || "gần đây";
+                              clExhausted.push(`Phân tích DL lúc ${at}`);
+                            }
+                            if (inst.last_quota_exhausted === "text_limit" && inst.last_quota_exhausted_at) {
+                              const at = inst.last_quota_exhausted_at.split(" ")[1] || "gần đây";
+                              clExhausted.push(`Text lúc ${at}`);
+                            }
+
+                            return (
+                            <div key={`claude:${inst.access_token || inst.ordinal}`}>
                               <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 transition-colors">
+                                {/* Ordinal badge */}
                                 <span
                                   className={cn(
                                     "shrink-0 inline-flex items-center justify-center min-w-[28px] h-5 px-1.5 rounded-md text-[11px] font-mono font-bold tabular-nums",
@@ -1400,28 +1422,59 @@ function AccountsPageContent() {
                                       ? "bg-emerald-100 text-emerald-700 ring-1 ring-emerald-300"
                                       : "bg-slate-100 text-slate-500"
                                   )}
-                                  title={inst.is_primary ? "Claude ưu tiên #1" : `Vị trí #${inst.ordinal}`}
+                                  title={inst.is_primary ? "Claude ưu tiên #1" : `Vị trí #${inst.ordinal} trong hàng đợi`}
                                 >
                                   #{inst.ordinal}
                                 </span>
-                                <div className="size-8 shrink-0 rounded-full flex items-center justify-center bg-gradient-to-br from-orange-500 to-amber-600">
+                                {/* Avatar */}
+                                <div className={cn("size-8 shrink-0 rounded-full flex items-center justify-center", statusColor)}>
                                   <span className="text-[10px] font-bold text-white">CL</span>
                                 </div>
+                                {/* Info */}
                                 <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-1.5">
-                                    <span className="text-[13px] font-semibold text-slate-800 truncate">{inst.label || inst.profile}</span>
-                                    <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-orange-50 text-orange-700 border border-orange-200">
-                                      Claude
-                                    </Badge>
-                                  </div>
-                                  <div className="flex items-center gap-2 mt-0.5">
-                                    <code className="text-[10px] text-slate-400">profile: {inst.profile}</code>
+                                  <div className="flex flex-col gap-1">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="text-[13px] font-semibold text-slate-800 truncate max-w-[180px]">
+                                        {inst.label || inst.email || `Account #${inst.ordinal}`}
+                                      </span>
+                                      <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-orange-50 text-orange-700 border border-orange-200">
+                                        Claude
+                                      </Badge>
+                                      <span className={cn(
+                                        "inline-flex items-center gap-0.5 rounded text-[10px] px-1 py-0",
+                                        clStatus === "active" ? "bg-emerald-500/10 text-emerald-600"
+                                        : clStatus === "error" ? "bg-rose-500/10 text-rose-500"
+                                        : "bg-amber-500/10 text-amber-600"
+                                      )}>
+                                        <span className={cn("size-1.5 rounded-full",
+                                          clStatus === "active" ? "bg-emerald-400"
+                                          : clStatus === "error" ? "bg-rose-400"
+                                          : "bg-amber-400"
+                                        )} />
+                                        {translateStatus(clStatus, lang)}
+                                      </span>
+                                    </div>
+                                    {clExhausted.length > 0 && (
+                                      <div className="flex flex-wrap items-center gap-1">
+                                        {clExhausted.map(f => (
+                                          <Badge key={`cl-ex-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-rose-50 text-rose-500 border border-rose-100 font-medium">
+                                            Hết {f}
+                                          </Badge>
+                                        ))}
+                                      </div>
+                                    )}
                                   </div>
                                 </div>
+                                {/* Success / fail */}
+                                <div className="hidden sm:flex items-center gap-2 text-[11px]">
+                                  <span className="text-emerald-600">{inst.success ?? 0}✓</span>
+                                  <span className="text-rose-400">{inst.fail ?? 0}✗</span>
+                                </div>
+                                {/* Actions */}
                                 <div className="flex items-center gap-1 text-slate-400" onClick={(e) => e.stopPropagation()}>
                                   <button
                                     className="rounded p-0.5 hover:bg-rose-50 hover:text-rose-500"
-                                    onClick={() => void mutateProviderAccounts("claude", inst.profile, "delete")}
+                                    onClick={() => void handleDeleteTokens([inst.access_token])}
                                     title="Xóa"
                                   >
                                     <Trash2 className="size-3" />
@@ -1429,14 +1482,13 @@ function AccountsPageContent() {
                                 </div>
                               </div>
                             </div>
-                          ))
+                            );
+                          })
                         ) : (
                           <div className="flex items-center gap-3 px-5 py-4 text-[13px] text-slate-500">
                             <Bot className="size-4 text-slate-400" />
                             <span>Chưa có tài khoản Claude.</span>
-                            <a href="/settings" className="inline-flex items-center gap-1 font-medium text-orange-600 hover:underline">
-                              <ExternalLink className="size-3.5" /> Thêm ở Settings → Claude
-                            </a>
+                            <span className="text-[12px] text-slate-400">Thêm tài khoản qua nút "Thêm" bên trên với type = <code className="bg-slate-100 px-1 rounded">claude</code></span>
                           </div>
                         )
                       )}

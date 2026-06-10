@@ -34,6 +34,7 @@ GROUP_FREE = "free"
 GROUP_CODEX = "codex"
 GROUP_OPENAI = "openai"
 GROUP_ANTIGRAVITY = "antigravity"
+GROUP_CLAUDE = "claude"
 
 
 def account_group(account: dict | None) -> str:
@@ -61,6 +62,9 @@ def account_group(account: dict | None) -> str:
 
     if GROUP_ANTIGRAVITY in types:
         return GROUP_ANTIGRAVITY
+    # Claude.ai web session (sessionKey) — completely separate pool.
+    if "claude" in types:
+        return GROUP_CLAUDE
     # Explicit Codex-token tag wins outright.
     if "codex" in types:
         return GROUP_CODEX
@@ -357,6 +361,49 @@ class AccountService:
                     if last_analysis_fail:
                         try:
                             from datetime import datetime
+                            fail_dt = datetime.strptime(last_analysis_fail, "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - fail_dt).total_seconds() < 6 * 3600:
+                                continue
+                        except Exception:
+                            pass
+                return token
+            return ""
+
+    def get_claude_session_key(
+        self,
+        excluded_tokens: set[str] | None = None,
+        requires_image: bool = False,
+    ) -> str:
+        """Return the next available Claude session key (access_token with type=claude).
+
+        Same priority-FIFO logic as get_text_access_token but scoped to
+        GROUP_CLAUDE accounts. When requires_image=True, additionally skip
+        accounts that recently failed image upload or advanced data analysis.
+        """
+        excluded = set(excluded_tokens or set())
+        with self._lock:
+            for account in self._accounts.values():
+                if account.get("status") in {"disabled", "error", "limited"}:
+                    continue
+                if account_group(account) != GROUP_CLAUDE:
+                    continue
+                token = account.get("access_token") or ""
+                if not token or token in excluded:
+                    continue
+                if requires_image:
+                    # Skip if recently failed image upload (within 6 hours)
+                    last_fail = account.get("last_image_failed_at")
+                    if last_fail:
+                        try:
+                            fail_dt = datetime.strptime(last_fail, "%Y-%m-%d %H:%M:%S")
+                            if (datetime.now() - fail_dt).total_seconds() < 6 * 3600:
+                                continue
+                        except Exception:
+                            pass
+                    # Skip if recently failed advanced data analysis (within 6 hours)
+                    last_analysis_fail = account.get("last_analysis_failed_at")
+                    if last_analysis_fail:
+                        try:
                             fail_dt = datetime.strptime(last_analysis_fail, "%Y-%m-%d %H:%M:%S")
                             if (datetime.now() - fail_dt).total_seconds() < 6 * 3600:
                                 continue

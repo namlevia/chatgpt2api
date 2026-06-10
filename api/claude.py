@@ -108,6 +108,23 @@ def _base_url() -> str:
 _SOLVER_KEY_TTL = 300.0
 _solver_key_cache: dict[str, tuple[float, str]] = {}
 
+# ── Lỗi quota Claude → ánh xạ sang loại hạn mức ─────────────────────────────
+_QUOTA_PATTERNS: list[tuple[str, str]] = [
+    ("rate limit",              "text_limit"),
+    ("too many requests",       "text_limit"),
+    ("overloaded",              "text_limit"),
+    ("usage limit",             "text_limit"),
+    ("exceeded",                "text_limit"),
+    ("file size",               "file_upload"),
+    ("file upload",             "file_upload"),
+    ("image upload",            "file_upload"),
+    ("upload failed",           "file_upload"),
+    ("vision",                  "file_upload"),
+    ("cannot analyze",          "advanced_data_analysis"),
+    ("unable to analyze",       "advanced_data_analysis"),
+    ("analysis",                "advanced_data_analysis"),
+]
+
 
 def _fetch_session_key_from_solver(cfg: dict[str, Any]) -> str:
     """Pull a logged-in claude.ai sessionKey from the captcha-solver.
@@ -547,27 +564,140 @@ class ClaudeFreeBackend:
 _backend = ClaudeFreeBackend()
 
 
+def _pick_session_key_from_pool(
+    excluded: set[str],
+    requires_image: bool = False,
+) -> str:
+    """Pick next Claude session key from account_service pool.
+    Falls back to config/captcha-solver if pool is empty."""
+    try:
+        from services.account_service import account_service
+        key = account_service.get_claude_session_key(
+            excluded_tokens=excluded,
+            requires_image=requires_image,
+        )
+        if key:
+            return key
+    except Exception:
+        pass
+    # Fallback: static config / captcha-solver (original behavior)
+    cfg = _claude_cfg()
+    key = _fetch_session_key_from_solver(cfg) or str(cfg.get("session_key") or "").strip()
+    return key if key not in excluded else ""
+
+
+def _classify_quota_error(error_msg: str) -> str:
+    """Map a Claude error message to an exhausted quota type."""
+    msg = error_msg.lower()
+    for pattern, quota_type in _QUOTA_PATTERNS:
+        if pattern in msg:
+            return quota_type
+    return "text_limit"
+
+
+def _record_quota_failure(session_key: str, quota_type: str, attempt: int) -> None:
+    """Write quota failure to account_service so UI and routing are updated."""
+    try:
+        from services.account_service import account_service
+        from datetime import datetime
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        if quota_type == "file_upload":
+            account_service.mark_image_failed(session_key)
+        elif quota_type == "advanced_data_analysis":
+            account_service.mark_analysis_failed(session_key)
+        else:
+            account_service.demote_account(session_key)
+        account_service.update_account(session_key, {
+            "last_quota_exhausted": quota_type,
+            "last_quota_exhausted_at": now_str,
+        })
+        acc = account_service.get_account(session_key)
+        email = (acc or {}).get("email") or session_key[:24]
+        _logger().info({
+            "event": "claude_account_rotate",
+            "reason": "quota_burnt",
+            "exhausted_item": quota_type,
+            "account": email,
+            "rotated_at": now_str,
+            "attempt": attempt,
+        })
+    except Exception as exc:
+        _logger().warning({"event": "claude_quota_record_failed", "error": str(exc)[:120]})
+
+
 def handle_claude_chat(
     model: str,
     messages: list[dict[str, Any]],
     stream: Any,
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | Iterator[dict[str, Any]]:
-    """Provider handler for the MAIN /v1/chat/completions router (claude/*,
-    clf/, cc/ models). Same ClaudeFreeBackend as the dedicated /v1/claude/*
-    endpoint; the route arrives with the prefix already stripped ("auto",
-    "sonnet-4.5-search", ...) which _resolve_model handles natively."""
-    if not _backend.is_available:
-        raise RuntimeError("Claude not configured (providers.claude.session_key)")
-    if stream:
-        return _backend.chat(messages, model)
-    content = _collect_text(_backend.chat(messages, model))
-    return {
-        "id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion",
-        "created": int(time.time()), "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-    }
+    """Provider handler with multi-account pool rotation.
+
+    Iterates through available Claude accounts in FIFO order.
+    On quota/auth error, marks the account and tries the next one.
+    """
+    requires_image = any(
+        isinstance(p, dict) and p.get("type") == "image_url"
+        for m in messages
+        for p in (m.get("content") if isinstance(m.get("content"), list) else [])
+    )
+    excluded: set[str] = set()
+    max_attempts = 8
+    last_error: Exception | None = None
+
+    for attempt in range(max_attempts):
+        session_key = _pick_session_key_from_pool(excluded, requires_image)
+        if not session_key:
+            break
+        backend = ClaudeFreeBackend()
+        backend._session = None
+        # Inject session key directly so this instance uses the selected account
+        backend._session_cookie = f"sessionKey={session_key}"
+
+        class _KeyedBackend(ClaudeFreeBackend):
+            def _cookie_header(self_inner) -> str:
+                return f"sessionKey={session_key}"
+
+        keyed = _KeyedBackend()
+        try:
+            if stream:
+                return keyed.chat(messages, model)
+            content = _collect_text(keyed.chat(messages, model))
+            return {
+                "id": f"chatcmpl-{uuid.uuid4().hex}",
+                "object": "chat.completion",
+                "created": int(time.time()),
+                "model": model,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            }
+        except Exception as exc:
+            last_error = exc
+            err_msg = str(exc).lower()
+            is_quota = any(p in err_msg for p in (
+                "rate limit", "too many", "overloaded", "exceeded",
+                "usage limit", "file", "upload", "vision", "analysis",
+            ))
+            is_auth = any(p in err_msg for p in ("session", "unauthorized", "401", "403", "expired"))
+            if is_quota:
+                quota_type = _classify_quota_error(str(exc))
+                _record_quota_failure(session_key, quota_type, attempt)
+            elif is_auth:
+                try:
+                    from services.account_service import account_service
+                    account_service.update_account(session_key, {"status": "error"})
+                except Exception:
+                    pass
+                _logger().warning({"event": "claude_auth_error", "attempt": attempt, "error": str(exc)[:120]})
+            else:
+                raise  # non-quota, non-auth → bubble up immediately
+            excluded.add(session_key)
+            continue
+
+    # All accounts exhausted or no pool configured
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("Không có tài khoản Claude khả dụng")
 
 
 # ═══════════════════════════════════════════════════════════════════════════
