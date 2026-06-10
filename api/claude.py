@@ -126,29 +126,47 @@ _QUOTA_PATTERNS: list[tuple[str, str]] = [
 ]
 
 
-def _fetch_session_key_from_solver(cfg: dict[str, Any]) -> str:
+def _fetch_session_key_from_solver(cfg: dict[str, Any], excluded_keys: set[str] | None = None) -> str:
     """Pull a logged-in claude.ai sessionKey from the captcha-solver.
 
-    Reuses the same Google-account onboard mechanism as ChatGPT/Flow:
-    config providers.claude.captcha_solver_url + captcha_solver_api_key +
-    profile (or profiles[] — first one that has a key wins).
+    Iterates ALL profiles in providers.claude.profiles[] (or accounts[].profile)
+    and returns the first available key that is NOT in excluded_keys.
+    This enables automatic pool rotation through all Google accounts already
+    onboarded in the captcha-solver — no manual session key entry needed.
     """
     base = str(cfg.get("captcha_solver_url") or "").rstrip("/")
     if not base:
         return ""
-    profiles = cfg.get("profiles")
-    if not isinstance(profiles, list) or not profiles:
-        profiles = [str(cfg.get("profile") or "claude-web-default")]
+    excluded = excluded_keys or set()
+
+    # Collect ALL profiles: accounts[].profile first, then profiles[], then single profile
+    profiles: list[str] = []
+    for entry in (cfg.get("accounts") or []):
+        if isinstance(entry, dict):
+            p = str(entry.get("profile") or "").strip()
+            if p and p not in profiles:
+                profiles.append(p)
+    for p in (cfg.get("profiles") or []):
+        p = str(p or "").strip()
+        if p and p not in profiles:
+            profiles.append(p)
+    legacy = str(cfg.get("profile") or "").strip()
+    if legacy and legacy not in profiles:
+        profiles.append(legacy)
+    if not profiles:
+        profiles = ["claude-web-default"]
+
     api_key = str(cfg.get("captcha_solver_api_key") or "")
     headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
 
     for profile in profiles:
-        profile = str(profile).strip()
-        if not profile:
-            continue
         cached = _solver_key_cache.get(profile)
         if cached and (time.time() - cached[0]) < _SOLVER_KEY_TTL and cached[1]:
-            return cached[1]
+            key = cached[1]
+            if key not in excluded:
+                return key
+            # Key is in excluded (failed this request) — try fetching a fresh one
+            # by falling through to the HTTP call below
         try:
             resp = requests.get(
                 f"{base}/v1/claude-web/{profile}/session",
@@ -158,7 +176,8 @@ def _fetch_session_key_from_solver(cfg: dict[str, Any]) -> str:
                 key = str((resp.json() or {}).get("session_key") or "")
                 if key:
                     _solver_key_cache[profile] = (time.time(), key)
-                    return key
+                    if key not in excluded:
+                        return key
         except Exception as exc:
             _logger().warning({"event": "claude_solver_key_fetch_failed", "profile": profile, "error": str(exc)})
     return ""
@@ -568,8 +587,15 @@ def _pick_session_key_from_pool(
     excluded: set[str],
     requires_image: bool = False,
 ) -> str:
-    """Pick next Claude session key from account_service pool.
-    Falls back to config/captcha-solver if pool is empty."""
+    """Pick next Claude session key, rotating through ALL available sources.
+
+    Priority order:
+    1. account_service pool (type=claude) — manually added accounts
+    2. captcha-solver profiles — ALL Google accounts already onboarded
+       (providers.claude.accounts[]/profiles[]) iterated automatically
+    3. Static session_key in config — last resort single account
+    """
+    # 1. Account service pool (manually added, full quota tracking)
     try:
         from services.account_service import account_service
         key = account_service.get_claude_session_key(
@@ -580,10 +606,16 @@ def _pick_session_key_from_pool(
             return key
     except Exception:
         pass
-    # Fallback: static config / captcha-solver (original behavior)
+
+    # 2. Captcha-solver profiles — iterate ALL, skip excluded
     cfg = _claude_cfg()
-    key = _fetch_session_key_from_solver(cfg) or str(cfg.get("session_key") or "").strip()
-    return key if key not in excluded else ""
+    key = _fetch_session_key_from_solver(cfg, excluded_keys=excluded)
+    if key:
+        return key
+
+    # 3. Static config key fallback
+    static = str(cfg.get("session_key") or "").strip()
+    return static if static and static not in excluded else ""
 
 
 def _classify_quota_error(error_msg: str) -> str:
