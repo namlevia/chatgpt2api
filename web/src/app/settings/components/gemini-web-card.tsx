@@ -100,7 +100,7 @@ export function GeminiWebCard() {
         profile: profile.trim() || "gemini-web-default",
         timeout: Math.max(30, Math.min(600, timeout)),
       };
-      await request.post("/api/settings", { config });
+      await request.post("/api/settings", config);
       toast.success("Đã lưu config Gemini Web");
     } catch (e: any) {
       toast.error(`Save fail: ${e?.message || e}`);

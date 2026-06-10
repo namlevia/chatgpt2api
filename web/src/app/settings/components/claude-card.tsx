@@ -105,7 +105,7 @@ export function ClaudeCard() {
       profiles: currentProfiles,
       model: config.providers.claude?.model || "auto",
     };
-    await request.post("/api/settings", { config });
+    await request.post("/api/settings", config);
   }
 
   async function pollOnboardStatus(profile: string, onSuccess: (s: OnboardState) => void) {
