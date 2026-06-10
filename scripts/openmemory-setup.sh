@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
-# Setup OpenMemory (CaviraOSS/OpenMemory) trên server — lớp ký ức dài hạn
-# cho chatgpt2api ("đổi account không mất dòng suy nghĩ").
+# Setup OpenMemory trên server — lớp ký ức dài hạn cho chatgpt2api
+# ("đổi account không mất dòng suy nghĩ").
 #
-# Không có image dựng sẵn → build từ source. Chạy 1 lần trên .38:
+# Image build sẵn bởi CI (.github/workflows/openmemory-build.yml) →
+# ghcr.io/tritue2011/openmemory:latest. Server CHỈ PULL, không build.
+#
+# Chạy 1 lần trên .38:
 #   OM_API_KEY=<key mạnh tự đặt> [GEMINI_API_KEY=<key AI Studio>] \
-#     bash deploy/openmemory-setup.sh
+#     bash scripts/openmemory-setup.sh
 #
 # Sau đó bật trong chatgpt2api config (UI Settings → providers):
 #   providers.openmemory = {
@@ -12,28 +15,23 @@
 #     "base_url": "http://172.16.10.38:8081",
 #     "api_key": "<OM_API_KEY ở trên>"
 #   }
-# KHÔNG commit key vào repo — key chỉ nằm trong /opt/openmemory/src/.env.
+# KHÔNG commit key vào repo — key chỉ nằm trong /opt/openmemory/.env.
 
 set -euo pipefail
 
 OM_DIR=/opt/openmemory
-SRC_DIR=$OM_DIR/src
 HOST_PORT=${HOST_PORT:-8081}
+IMAGE=${IMAGE:-ghcr.io/tritue2011/openmemory:latest}
 
 if [ -z "${OM_API_KEY:-}" ]; then
   echo "ERROR: cần OM_API_KEY=... (key tự đặt cho OpenMemory)" >&2
   exit 1
 fi
 
-mkdir -p "$OM_DIR"
-if [ -d "$SRC_DIR/.git" ]; then
-  git -C "$SRC_DIR" pull --ff-only
-else
-  git clone --depth 1 https://github.com/CaviraOSS/OpenMemory.git "$SRC_DIR"
-fi
+mkdir -p "$OM_DIR/data"
 
 # .env — chứa secret, chỉ nằm trên server
-cat > "$SRC_DIR/.env" <<EOF
+cat > "$OM_DIR/.env" <<EOF
 OM_API_KEY=$OM_API_KEY
 OM_PORT=8080
 OM_METADATA_BACKEND=sqlite
@@ -46,31 +44,20 @@ OM_MIN_SCORE=0.3
 EOF
 # Có key Gemini → dùng embeddings gemini (recall tốt hơn synthetic)
 if [ -n "${GEMINI_API_KEY:-}" ]; then
-  sed -i 's/^OM_EMBEDDINGS=.*/OM_EMBEDDINGS=gemini/' "$SRC_DIR/.env"
-  echo "GEMINI_API_KEY=$GEMINI_API_KEY" >> "$SRC_DIR/.env"
+  sed -i 's/^OM_EMBEDDINGS=.*/OM_EMBEDDINGS=gemini/' "$OM_DIR/.env"
+  echo "GEMINI_API_KEY=$GEMINI_API_KEY" >> "$OM_DIR/.env"
 fi
-chmod 600 "$SRC_DIR/.env"
+chmod 600 "$OM_DIR/.env"
 
-# Compose riêng (không dùng compose gốc của repo): tự kiểm soát port host
-# (8080 có thể bận) + persist data ra /opt/openmemory/data
-mkdir -p "$OM_DIR/data"
-cat > "$SRC_DIR/docker-compose.chatgpt2api.yml" <<EOF
-services:
-  openmemory:
-    build:
-      context: ./packages/openmemory-js
-      dockerfile: Dockerfile
-    container_name: openmemory
-    restart: unless-stopped
-    env_file: .env
-    ports:
-      - "$HOST_PORT:8080"
-    volumes:
-      - $OM_DIR/data:/data
-EOF
-
-cd "$SRC_DIR"
-docker compose -f docker-compose.chatgpt2api.yml up --build -d
+docker pull "$IMAGE"
+docker rm -f openmemory 2>/dev/null || true
+docker run -d \
+  --name openmemory \
+  --restart unless-stopped \
+  --env-file "$OM_DIR/.env" \
+  -p "$HOST_PORT:8080" \
+  -v "$OM_DIR/data:/data" \
+  "$IMAGE"
 
 echo "[openmemory] waiting for health..."
 for i in $(seq 1 30); do
