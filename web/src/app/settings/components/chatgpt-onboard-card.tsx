@@ -235,7 +235,7 @@ export function ChatGPTOnboardCard() {
       const res = await fetch(`${cs.url}/v1/chatgpt/onboard`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ profile, reuse_session: true }),
+        body: JSON.stringify({ profile, email: "", password: "", reuse_session: true }),
       });
       if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
       const initial = await res.json();

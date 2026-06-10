@@ -148,7 +148,7 @@ export function GeminiWebCard() {
       const res = await fetch(`${cs.url}/v1/gemini-web/onboard`, {
         method: "POST",
         headers: { "Authorization": `Bearer ${cs.apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ profile: prof }),
+        body: JSON.stringify({ profile: prof, email: "", password: "" }),
       });
       if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
       const initial = await res.json();
