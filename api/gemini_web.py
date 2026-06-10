@@ -168,12 +168,19 @@ def _drop_client(psid: str) -> None:
 # model_name nội bộ của gemini_webapi. "Mở rộng" = tier advanced (tư duy sâu).
 # Lib KHÔNG có model "Flash-Lite" riêng → map về flash. Tên lib gốc vẫn route OK.
 _GMA_ALIASES = {
-    "flash": "gemini-3-flash",                      # 3.5 Flash (Tiêu chuẩn)
-    "flash-lite": "gemini-3-flash",                 # UI Flash-Lite (lib chưa tách)
-    "flash-thinking": "gemini-3-flash-thinking",    # Flash kèm suy luận
-    "flash-extended": "gemini-3-flash-advanced",    # 3.5 Flash (Mở rộng)
-    "pro": "gemini-3-pro",                          # 3.1 Pro (Tiêu chuẩn)
-    "pro-extended": "gemini-3-pro-advanced",        # 3.1 Pro (Mở rộng)
+    # Tên khớp UI Gemini (không dấu cho an toàn client) — bộ hiển thị chính
+    "3.5-flash": "gemini-3-flash",                  # 3.5 Flash (Tiêu chuẩn)
+    "3.5-flash-mo-rong": "gemini-3-flash-advanced", # 3.5 Flash (Mở rộng)
+    "3.1-pro": "gemini-3-pro",                      # 3.1 Pro (Tiêu chuẩn)
+    "3.1-pro-mo-rong": "gemini-3-pro-advanced",     # 3.1 Pro (Mở rộng)
+    "3.1-flash-lite": "gemini-3-flash",             # Flash-Lite (lib chưa tách → flash)
+    # Alias cũ — vẫn nhận để không vỡ request đã cấu hình
+    "flash": "gemini-3-flash",
+    "flash-lite": "gemini-3-flash",
+    "flash-thinking": "gemini-3-flash-thinking",
+    "flash-extended": "gemini-3-flash-advanced",
+    "pro": "gemini-3-pro",
+    "pro-extended": "gemini-3-pro-advanced",
 }
 
 

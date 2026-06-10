@@ -794,18 +794,13 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
             data.append({"id": mid, "object": "model", "created": 0, "owned_by": "claude"})
 
     # Gemini web-cookie API models (gma/ — gemini.google.com qua 1PSID).
-    # Tên thân thiện khớp UI Gemini (Flash/Pro + Tiêu chuẩn/Mở rộng) đứng trước;
-    # kèm tên lib gốc (lấy ĐỘNG từ enum) cho tương thích & power-user.
-    gma_models = ["gma/auto", "gma/flash", "gma/flash-extended",
-                  "gma/pro", "gma/pro-extended", "gma/flash-thinking"]
-    try:
-        from gemini_webapi.constants import Model as _GMModel
-        for _m in _GMModel:
-            nm = getattr(_m, "model_name", "")
-            if nm and nm != "unspecified":
-                gma_models.append(f"gma/{nm}")
-    except Exception:
-        pass
+    # Chỉ list tên khớp UI Gemini cho dễ chọn (3.5 Flash / 3.1 Pro / Flash-Lite
+    # + "-mo-rong" = cấp tư duy Mở rộng). Alias cũ (gma/flash...) và tên lib gốc
+    # (gma/gemini-3-*) KHÔNG list nhưng vẫn route được (_GMA_ALIASES/from_name).
+    gma_models = ["gma/auto",
+                  "gma/3.5-flash", "gma/3.5-flash-mo-rong",
+                  "gma/3.1-pro", "gma/3.1-pro-mo-rong",
+                  "gma/3.1-flash-lite"]
     for mid in gma_models:
         if mid not in seen:
             seen.add(mid)
