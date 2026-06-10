@@ -629,9 +629,11 @@ def handle_gemini_web_api_chat(
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
-def handle_gemini_web_api_image_gen(prompt: str, n: int = 1) -> dict[str, Any]:
+def handle_gemini_web_api_image_gen(prompt: str, n: int = 1, response_format: str = "url") -> dict[str, Any]:
     """OpenAI /v1/images/generations handler for Gemini Web API."""
     from services.account_service import account_service
+    from curl_cffi import requests as cffi_requests
+    import base64
     import time
     
     available_creds = _get_cookies_ranked(required_features=["text"])
@@ -657,7 +659,21 @@ def handle_gemini_web_api_image_gen(prompt: str, n: int = 1) -> dict[str, Any]:
                     raise RuntimeError(f"QUOTA_EXHAUSTED: {text[:100]}")
                 raise RuntimeError(f"No images generated. Text response: {text[:200]}")
                 
-            return {"created": int(time.time()), "data": [{"url": u} for u in urls[:n]]}
+            data = []
+            for u in urls[:n]:
+                if response_format == "b64_json":
+                    try:
+                        r = cffi_requests.get(u, timeout=30)
+                        if r.status_code == 200:
+                            data.append({"b64_json": base64.b64encode(r.content).decode("ascii")})
+                        else:
+                            data.append({"url": u}) # Fallback
+                    except Exception:
+                        data.append({"url": u})
+                else:
+                    data.append({"url": u})
+                    
+            return {"created": int(time.time()), "data": data}
             
         except Exception as exc:
             err = str(exc).lower()

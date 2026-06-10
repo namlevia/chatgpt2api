@@ -492,9 +492,11 @@ def handle_gemini_web_chat(
     return _build_openai_response(text, full_model)
 
 
-def handle_gemini_web_image_gen(prompt: str, n: int = 1) -> dict[str, Any]:
+def handle_gemini_web_image_gen(prompt: str, n: int = 1, response_format: str = "url") -> dict[str, Any]:
     """OpenAI /v1/images/generations handler for Gemini Web (Imagen).
     Returns OpenAI-format {"created": ..., "data": [{"url": ...}]}."""
+    from curl_cffi import requests as cffi_requests
+    import base64
     cfg = _web_provider_cfg("gemini_web")
     profile = str(cfg.get("profile") or "gemini-web-default")
     timeout = int(cfg.get("timeout") or 240)
@@ -512,4 +514,19 @@ def handle_gemini_web_image_gen(prompt: str, n: int = 1) -> dict[str, Any]:
     _log_web_call(LOG_TYPE_WEB_IMAGE, provider="gemini_web", profile=profile,
                   op="image_gen", started_at=started_at, prompt_len=len(prompt),
                   extra={"n": n, "got": len(urls), **meta})
-    return {"created": int(time.time()), "data": [{"url": u} for u in urls]}
+                  
+    data = []
+    for u in urls:
+        if response_format == "b64_json":
+            try:
+                r = cffi_requests.get(u, timeout=30)
+                if r.status_code == 200:
+                    data.append({"b64_json": base64.b64encode(r.content).decode("ascii")})
+                else:
+                    data.append({"url": u}) # Fallback
+            except Exception:
+                data.append({"url": u})
+        else:
+            data.append({"url": u})
+            
+    return {"created": int(time.time()), "data": data}
