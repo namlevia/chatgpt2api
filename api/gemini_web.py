@@ -364,7 +364,28 @@ def _generate_text(client, prompt: str, files: list[str], model_enum) -> str:
     if model_enum is not None:
         kwargs["model"] = model_enum
     resp = _run(client.generate_content(prompt, **kwargs))
-    return str(getattr(resp, "text", "") or "")
+    
+    text = str(getattr(resp, "text", "") or "")
+    
+    # Extract generated images
+    if hasattr(resp, "images") and resp.images:
+        for img in resp.images:
+            url = getattr(img, "url", "")
+            title = getattr(img, "title", "Generated Image")
+            if url:
+                text += f"\n\n![{title}]({url})"
+                
+    # Extract generated audios/videos if available
+    for attr, label in [("audios", "Audio"), ("videos", "Video")]:
+        media_list = getattr(resp, attr, None)
+        if media_list:
+            for m in media_list:
+                url = getattr(m, "url", "")
+                title = getattr(m, "title", f"Generated {label}")
+                if url:
+                    text += f"\n\n[{label}: {title}]({url})"
+                    
+    return text
 
 
 import json
