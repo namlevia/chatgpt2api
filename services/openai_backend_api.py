@@ -735,12 +735,20 @@ class OpenAIBackendAPI:
         )
         ensure_ok(response, "image_upload")
         path = f"/backend-api/files/{upload_meta['file_id']}/uploaded"
-        response = s.post(
-            self.base_url + path,
-            headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
-            data="{}",
-            timeout=60,
-        )
+        # chatgpt.com occasionally 500s the finalize right after the blob PUT
+        # (storage sync race) — retry briefly instead of failing the request.
+        for attempt in range(3):
+            response = s.post(
+                self.base_url + path,
+                headers=self._headers(path, {"Content-Type": "application/json", "Accept": "application/json"}),
+                data="{}",
+                timeout=60,
+            )
+            if response.status_code < 500 or attempt == 2:
+                break
+            logger.warning({"event": "chatgpt_file_finalize_retry",
+                            "status": response.status_code, "attempt": attempt})
+            time.sleep(0.75 * (attempt + 1))
         ensure_ok(response, path)
         return {
             "file_id": upload_meta["file_id"],
