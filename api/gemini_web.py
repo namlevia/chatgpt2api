@@ -81,9 +81,9 @@ def _fetch_cookies_from_solver(profile: str) -> dict[str, str]:
     if not sc["url"]:
         return {}
     try:
-        headers = {"X-API-Key": sc["api_key"]} if sc["api_key"] else {}
+        headers = {"Authorization": f"Bearer {sc['api_key']}"} if sc["api_key"] else {}
         r = requests.get(f"{sc['url']}/v1/gemini-web/{profile}/cookies",
-                         headers=headers, timeout=30)
+                         headers=headers, timeout=30, impersonate="chrome110")
         if r.status_code == 200:
             cookies = (r.json() or {}).get("cookies") or {}
             if cookies.get("__Secure-1PSID"):
@@ -148,7 +148,8 @@ def _get_client(psid: str, psidts: str):
         if cli is not None:
             return cli
         from gemini_webapi import GeminiClient
-        cli = GeminiClient(Secure_1PSID=psid, Secure_1PSIDTS=psidts or None)
+        # gemini_webapi 2.x uses lowercase constructor params.
+        cli = GeminiClient(secure_1psid=psid, secure_1psidts=psidts or None)
         _run(cli.init(timeout=30, auto_close=False, auto_refresh=True), timeout=60)
         _clients[key] = cli
         _logger().info({"event": "gma_client_init", "psid_prefix": psid[:12]})
