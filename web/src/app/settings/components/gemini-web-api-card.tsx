@@ -151,40 +151,53 @@ export function GeminiWebApiCard() {
         body: JSON.stringify({ profile: prof }),
       });
       if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
-      setSession(await res.json());
+      const initial = await res.json();
+      setSession(initial);
       toast.info(`Đang tái dùng ${prof} cho Gemini Web API…`);
-      pollRef.current = window.setInterval(async () => {
+      const handleSuccess = async (data: OnboardState) => {
         try {
-          const r = await fetch(`${cs.url}/v1/gemini-web/${encodeURIComponent(prof)}/onboard-status`, {
-            headers: { Authorization: `Bearer ${cs.apiKey}` },
-          });
-          if (!r.ok) return;
-          const data: OnboardState = await r.json();
-          setSession(data);
-          if (data.state === "success") {
-            stopPolling();
-            setRunning(false);
-            try {
-              const cur = await request.get("/api/settings");
-              const config = (cur.data as any)?.config || {};
-              config.providers = config.providers || {};
-              config.providers.gemini_web_api = {
-                ...(config.providers.gemini_web_api || {}),
-                enabled: true,
-                profile: prof,
-              };
-              await request.post("/api/settings", { config });
-              toast.success(`Gemini Web API dùng profile ${prof} ✓`);
-            } catch (e: any) {
-              toast.error(`Lưu config fail: ${e?.message || e}`);
+          const cur = await request.get("/api/settings");
+          const config = (cur.data as any)?.config || {};
+          config.providers = config.providers || {};
+          config.providers.gemini_web_api = {
+            ...(config.providers.gemini_web_api || {}),
+            enabled: true,
+            profile: prof,
+          };
+          await request.post("/api/settings", config);
+          toast.success(`Gemini Web API dùng profile ${prof} ✓`);
+        } catch (e: any) {
+          toast.error(`Lưu config fail: ${e?.message || e}`);
+        }
+      };
+      
+      if (initial.state === "success") {
+        setRunning(false);
+        void handleSuccess(initial);
+      } else if (initial.state === "failed") {
+        setRunning(false);
+        toast.error(`Reuse fail: ${initial.error || initial.message}`);
+      } else {
+        pollRef.current = window.setInterval(async () => {
+          try {
+            const r = await fetch(`${cs.url}/v1/gemini-web/${encodeURIComponent(prof)}/onboard-status`, {
+              headers: { Authorization: `Bearer ${cs.apiKey}` },
+            });
+            if (!r.ok) return;
+            const data: OnboardState = await r.json();
+            setSession(data);
+            if (data.state === "success") {
+              stopPolling();
+              setRunning(false);
+              void handleSuccess(data);
+            } else if (data.state === "failed") {
+              stopPolling();
+              setRunning(false);
+              toast.error(`Reuse fail: ${data.error || data.message}`);
             }
-          } else if (data.state === "failed") {
-            stopPolling();
-            setRunning(false);
-            toast.error(`Reuse fail: ${data.error || data.message}`);
-          }
-        } catch { /* ignore */ }
-      }, 1500);
+          } catch { /* ignore */ }
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Reuse error: ${e?.message}`);
       setRunning(false);
@@ -215,7 +228,11 @@ export function GeminiWebApiCard() {
       setSession(initial);
       const noVncUrl = cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1";
       window.open(noVncUrl, "_blank", "noopener,width=1024,height=720");
-      pollRef.current = window.setInterval(() => void pollStatus(), 1500);
+      if (initial.state === "success" || initial.state === "failed") {
+        void pollStatus();
+      } else {
+        pollRef.current = window.setInterval(() => void pollStatus(), 1500);
+      }
     } catch (e: any) {
       toast.error(`Onboard error: ${e?.message}`);
       setRunning(false);

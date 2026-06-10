@@ -209,9 +209,16 @@ export function ChatGPTOnboardCard() {
           setRunning(false);
         }
       };
-      pollRef.current = window.setInterval(() => {
-        void pollOnboardStatus(profile, handleSuccess);
-      }, 1500);
+      if (initial.state === "success") {
+        void handleSuccess(initial);
+      } else if (initial.state === "failed") {
+        toast.error(`Onboard fail: ${initial.error || initial.message}`);
+        setRunning(false);
+      } else {
+        pollRef.current = window.setInterval(() => {
+          void pollOnboardStatus(profile, handleSuccess);
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Onboard error: ${e?.message}`);
       setRunning(false);
@@ -256,9 +263,16 @@ export function ChatGPTOnboardCard() {
           setRunning(false);
         }
       };
-      pollRef.current = window.setInterval(() => {
-        void pollOnboardStatus(profile, handleSuccess);
-      }, 1500);
+      if (initial.state === "success") {
+        void handleSuccess(initial);
+      } else if (initial.state === "failed") {
+        toast.error(`Reuse fail: ${initial.error || initial.message}`);
+        setRunning(false);
+      } else {
+        pollRef.current = window.setInterval(() => {
+          void pollOnboardStatus(profile, handleSuccess);
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Reuse error: ${e?.message}`);
       setRunning(false);
@@ -291,29 +305,38 @@ export function ChatGPTOnboardCard() {
         }),
       });
       if (!res.ok) throw new Error(`auto-login HTTP ${res.status}`);
-      setSession({ ...(await res.json()), profile, email: draft.email.trim() });
+      const initial = await res.json();
+      setSession({ ...initial, profile, email: draft.email.trim() });
       const noVncUrl = cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1";
       window.open(noVncUrl, "_blank", "noopener,width=1024,height=720");
       toast.info(`Đang đăng nhập Google vào ${profile} (KHÔNG add pool)…`);
-      pollRef.current = window.setInterval(async () => {
-        try {
-          const r = await fetch(`${cs.url}/v1/session/${encodeURIComponent(profile)}/auto-login-status`, {
-            headers: { Authorization: `Bearer ${cs.apiKey}` },
-          });
-          if (!r.ok) return;
-          const data = await r.json();
-          setSession({ ...data, profile, email: draft.email.trim() });
-          if (data.state === "success") {
-            stopPolling();
-            setRunning(false);
-            toast.success(`Đăng nhập ${profile} xong — CHƯA add pool. Dùng nút "Tái dùng" để thêm ChatGPT/Gemini/Flow.`);
-          } else if (data.state === "failed") {
-            stopPolling();
-            setRunning(false);
-            toast.error(`Login fail: ${data.error || data.message}`);
-          }
-        } catch { /* ignore */ }
-      }, 1500);
+      if (initial.state === "success") {
+        setRunning(false);
+        toast.success(`Đăng nhập ${profile} xong — CHƯA add pool. Dùng nút "Tái dùng" để thêm ChatGPT/Gemini/Flow.`);
+      } else if (initial.state === "failed") {
+        setRunning(false);
+        toast.error(`Login fail: ${initial.error || initial.message}`);
+      } else {
+        pollRef.current = window.setInterval(async () => {
+          try {
+            const r = await fetch(`${cs.url}/v1/session/${encodeURIComponent(profile)}/auto-login-status`, {
+              headers: { Authorization: `Bearer ${cs.apiKey}` },
+            });
+            if (!r.ok) return;
+            const data = await r.json();
+            setSession({ ...data, profile, email: draft.email.trim() });
+            if (data.state === "success") {
+              stopPolling();
+              setRunning(false);
+              toast.success(`Đăng nhập ${profile} xong — CHƯA add pool. Dùng nút "Tái dùng" để thêm ChatGPT/Gemini/Flow.`);
+            } else if (data.state === "failed") {
+              stopPolling();
+              setRunning(false);
+              toast.error(`Login fail: ${data.error || data.message}`);
+            }
+          } catch { /* ignore */ }
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Auto-login error: ${e?.message}`);
       setRunning(false);

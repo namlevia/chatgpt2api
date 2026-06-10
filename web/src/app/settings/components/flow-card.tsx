@@ -385,9 +385,16 @@ export function FlowCard() {
           setOneClickRunning(false);
         }
       };
-      pollIntervalRef.current = window.setInterval(() => {
-        void pollLoginStatus(profile, onSuccess);
-      }, 1500);
+      if (initialSession.state === "success") {
+        void onSuccess();
+      } else if (initialSession.state === "failed") {
+        toast.error(`Auto-login lỗi: ${initialSession.error || initialSession.message}`);
+        setOneClickRunning(false);
+      } else {
+        pollIntervalRef.current = window.setInterval(() => {
+          void pollLoginStatus(profile, onSuccess);
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Lỗi 1-click: ${e?.message}`);
       setOneClickRunning(false);
@@ -426,10 +433,15 @@ export function FlowCard() {
       toast.success("Auto-login đã chạy — theo dõi ở dưới");
       // Open noVNC so user can see Chrome live
       openNoVNC();
-      // Start polling every 1.5s
-      pollIntervalRef.current = window.setInterval(() => {
-        void pollLoginStatus(profile);
-      }, 1500);
+      if (data.state === "success") {
+        toast.success("Đăng nhập thành công 🎉");
+      } else if (data.state === "failed") {
+        toast.error(`Auto-login lỗi: ${data.error || data.message}`);
+      } else {
+        pollIntervalRef.current = window.setInterval(() => {
+          void pollLoginStatus(profile);
+        }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Lỗi auto-login: ${e?.message}`);
     }

@@ -145,7 +145,8 @@ export function ClaudeCard() {
         body: JSON.stringify({ profile, email: draft.email.trim(), password: draft.password, totp_secret: draft.totpSecret.trim() }),
       });
       if (!res.ok) throw new Error(`onboard HTTP ${res.status}`);
-      setSession(await res.json());
+      const initData = await res.json();
+      setSession(initData);
       window.open(cs.url.replace(":8010", ":6080") + "/vnc.html?autoconnect=1", "_blank", "noopener,width=1024,height=720");
       const handleSuccess = async () => {
         try {
@@ -158,7 +159,14 @@ export function ClaudeCard() {
           setRunning(false);
         }
       };
-      pollRef.current = window.setInterval(() => { void pollOnboardStatus(profile, handleSuccess); }, 1500);
+      if (initData.state === "success") {
+        void handleSuccess();
+      } else if (initData.state === "failed") {
+        toast.error(`Onboard fail: ${initData.error || initData.message}`);
+        setRunning(false);
+      } else {
+        pollRef.current = window.setInterval(() => { void pollOnboardStatus(profile, handleSuccess); }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Onboard error: ${e?.message}`);
       setRunning(false);
@@ -177,7 +185,8 @@ export function ClaudeCard() {
         body: JSON.stringify({ profile }),
       });
       if (!res.ok) throw new Error(`reuse HTTP ${res.status}`);
-      setSession(await res.json());
+      const initData = await res.json();
+      setSession(initData);
       toast.info(`Đang tái dùng session của ${profile}…`);
       const handleSuccess = async () => {
         try {
@@ -189,7 +198,14 @@ export function ClaudeCard() {
           setRunning(false);
         }
       };
-      pollRef.current = window.setInterval(() => { void pollOnboardStatus(profile, handleSuccess); }, 1500);
+      if (initData.state === "success") {
+        void handleSuccess();
+      } else if (initData.state === "failed") {
+        toast.error(`Reuse fail: ${initData.error || initData.message}`);
+        setRunning(false);
+      } else {
+        pollRef.current = window.setInterval(() => { void pollOnboardStatus(profile, handleSuccess); }, 1500);
+      }
     } catch (e: any) {
       toast.error(`Reuse error: ${e?.message}`);
       setRunning(false);
