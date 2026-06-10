@@ -192,17 +192,41 @@ def handle_free_chat(
             if not is_quota:
                 raise
             
+            from datetime import datetime
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            
+            # Determine exactly which quota was exhausted
+            exhausted_item = "text_limit"
+            if "advanced data analysis" in err_msg:
+                exhausted_item = "advanced_data_analysis"
+            elif requires_image and ("file" in err_msg or "image" in err_msg or "upload" in err_msg or "413" in err_msg or "limit" in err_msg):
+                exhausted_item = "file_upload"
+            
             try:
-                if requires_image and ("file" in err_msg or "image" in err_msg or "upload" in err_msg or "413" in err_msg or "limit" in err_msg):
+                acc_info = account_service.get_account(token)
+                email = acc_info.get("email") or token[:20] if acc_info else token[:20]
+                
+                if exhausted_item == "file_upload":
                     account_service.mark_image_failed(token)
                 else:
                     account_service.demote_account(token)
+                
+                # Add notes for UI or debugging
+                account_service.update_account(token, {
+                    "last_quota_exhausted": exhausted_item, 
+                    "last_quota_exhausted_at": now_str
+                })
             except Exception:
-                pass
+                email = token[:20]
                 
             logger.info({
-                "event": "free_account_rotate", "reason": "quota_burnt",
-                "attempt": attempt, "remaining_excluded": len(excluded_tokens) + 1,
+                "event": "free_account_rotate", 
+                "reason": "quota_burnt",
+                "exhausted_item": exhausted_item,
+                "account": email,
+                "rotated_at": now_str,
+                "attempt": attempt, 
+                "remaining_excluded": len(excluded_tokens) + 1,
             })
             excluded_tokens.add(token)
             last_quota_error = exc

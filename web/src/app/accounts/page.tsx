@@ -1039,6 +1039,16 @@ function AccountsPageContent() {
                               if (!hasLimitsImageGen && !isUnlimited && !imageQuotaUnknown(account) && quotaVal <= 0) {
                                 exhausted.push("Tạo ảnh");
                               }
+                              
+                              if ((account as any).last_quota_exhausted) {
+                                const val = (account as any).last_quota_exhausted;
+                                const trans = val === "file_upload" ? "Gửi ảnh" :
+                                              val === "advanced_data_analysis" ? "Phân tích DL" :
+                                              "Text";
+                                const at = (account as any).last_quota_exhausted_at?.split(' ')[1] || 'gần đây';
+                                exhausted.push(`${trans} lúc ${at}`);
+                              }
+                              
                               const uniqueExhausted = Array.from(new Set(exhausted));
 
                               return (
