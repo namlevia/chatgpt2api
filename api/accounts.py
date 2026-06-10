@@ -402,6 +402,24 @@ def create_router() -> APIRouter:
         from services.account_service import GROUP_CLAUDE
         claude_accounts = [a for a in accounts if account_group(a) == GROUP_CLAUDE]
         claude_cfg = providers_cfg.get("claude") or {}
+        if not claude_accounts:
+            c_profs: list[str] = []
+            for entry in (claude_cfg.get("accounts") or []):
+                if isinstance(entry, dict) and entry.get("profile"):
+                    c_profs.append(str(entry.get("profile")))
+            if isinstance(claude_cfg.get("profiles"), list):
+                for p in claude_cfg.get("profiles"):
+                    if isinstance(p, str) and p and p not in c_profs:
+                        c_profs.append(p)
+            legacy_c = str(claude_cfg.get("profile") or "").strip()
+            if legacy_c and legacy_c not in c_profs:
+                c_profs.append(legacy_c)
+            for p in c_profs:
+                claude_accounts.append({
+                    "access_token": p,
+                    "email": p,
+                    "status": "active",
+                })
         claude_instances = []
         for idx, acc in enumerate(claude_accounts):
             last_quota = acc.get("last_quota_exhausted") or ""
