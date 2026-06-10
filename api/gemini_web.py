@@ -628,3 +628,58 @@ def handle_gemini_web_api_chat(
                      "finish_reason": "tool_calls" if tool_calls else "stop"}],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
+
+def handle_gemini_web_api_image_gen(prompt: str, n: int = 1) -> dict[str, Any]:
+    """OpenAI /v1/images/generations handler for Gemini Web API."""
+    from services.account_service import account_service
+    import time
+    
+    available_creds = _get_cookies_ranked(required_features=["text"])
+    if not available_creds:
+        raise RuntimeError("No gemini_web_api accounts available")
+        
+    last_exc = None
+    for psid, psidts, profile in available_creds:
+        try:
+            client = _get_client(psid, psidts)
+            resp = _run(client.generate_content(prompt))
+            urls = []
+            if hasattr(resp, "images") and resp.images:
+                for img in resp.images:
+                    url = getattr(img, "url", "")
+                    if url:
+                        urls.append(url)
+            
+            if not urls:
+                # Detect quota limits
+                text = str(getattr(resp, "text", "") or "").lower()
+                if any(k in text for k in ("reached your limit", "giới hạn", "usage cap", "hết lượt")):
+                    raise RuntimeError(f"QUOTA_EXHAUSTED: {text[:100]}")
+                raise RuntimeError(f"No images generated. Text response: {text[:200]}")
+                
+            return {"created": int(time.time()), "data": [{"url": u} for u in urls[:n]]}
+            
+        except Exception as exc:
+            err = str(exc).lower()
+            if "quota_exhausted" in err:
+                _logger().warning({"event": "gma_quota_hit", "profile": profile})
+                if profile and profile != "static-config":
+                    account_service.record_profile_quota_failure(
+                        profile=profile,
+                        quota_type="text_limit",
+                        account_type="gemini_web_api"
+                    )
+                last_exc = exc
+                continue
+                
+            if any(k in err for k in ("auth", "cookie", "1psid", "401", "403")):
+                _logger().warning({"event": "gma_auth_retry", "error": str(exc)[:120]})
+                _drop_client(psid)
+                last_exc = exc
+                continue
+                
+            raise exc
+            
+    if last_exc:
+        raise last_exc
+    raise RuntimeError("No available accounts to fulfill image request")

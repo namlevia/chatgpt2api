@@ -374,6 +374,17 @@ def _handle_single_image(route, body: dict[str, Any]) -> dict[str, Any] | Iterat
         })
         from services.providers.web_proxy import handle_gemini_web_image_gen
         return handle_gemini_web_image_gen(prompt, n=n)
+        
+    # HTTP API providers: gemini_web_api
+    if route.provider == "gemini_web_api":
+        prompt = _translate_prompt(prompt) if prompt else prompt
+        logger.info({
+            "event": "image_routed_to_gma",
+            "provider": route.provider,
+            "n": n,
+        })
+        from api.gemini_web import handle_gemini_web_api_image_gen
+        return handle_gemini_web_api_image_gen(prompt, n=n)
 
     # For chatgpt/ DALL-E: use original chatgpt.com backend flow (same as upstream)
     # Let combo fallback handle failures if token can't access chatgpt.com
