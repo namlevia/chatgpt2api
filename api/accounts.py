@@ -354,6 +354,20 @@ def create_router() -> APIRouter:
                     "captcha_solver_url": cgw_cfg.get("captcha_solver_url") or "",
                 })
 
+        # ── Gemini Web API profile branch ──
+        gmwa_cfg = providers_cfg.get("gemini_web_api") or {}
+        if gmwa_cfg.get("enabled"):
+            gmwa_items = _collect_web_accounts(gmwa_cfg, "gemini_web_api")
+            if gmwa_items:
+                tree.append({
+                    "provider": "Gemini Web API",
+                    "icon": "gemini",
+                    "type": "gemini_web_api",
+                    "instances": gmwa_items,
+                    "total": len(gmwa_items),
+                    "captcha_solver_url": gmwa_cfg.get("captcha_solver_url") or "",
+                })
+
         # ── Google Labs Flow accounts branch ──
         flow_cfg = providers_cfg.get("flow") or {}
         flow_accounts = flow_cfg.get("accounts") if isinstance(flow_cfg.get("accounts"), list) else []

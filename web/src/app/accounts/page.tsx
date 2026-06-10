@@ -1312,12 +1312,12 @@ function AccountsPageContent() {
                         </div>
                       ))}
 
-                      {/* Gemini Web / ChatGPT Web profile rows — same rich UX as Claude.
+                      {/* Gemini Web / ChatGPT Web / Gemini Web API profile rows — same rich UX as Claude.
                           Reads from config but merges with account_service for quota/status. */}
-                      {(provider.type === "gemini_web" || provider.type === "chatgpt_web") && provider.instances?.map((inst: any) => {
-                        const providerKey = provider.type as "gemini_web" | "chatgpt_web";
-                        const tagLabel = providerKey === "gemini_web" ? "Gemini Web" : "ChatGPT Web";
-                        const initials = providerKey === "gemini_web" ? "GM" : "CG";
+                      {(provider.type === "gemini_web" || provider.type === "chatgpt_web" || provider.type === "gemini_web_api") && provider.instances?.map((inst: any) => {
+                        const providerKey = provider.type as "gemini_web" | "chatgpt_web" | "gemini_web_api";
+                        const tagLabel = providerKey === "gemini_web" ? "Gemini Web" : providerKey === "chatgpt_web" ? "ChatGPT Web" : "Gemini Web API";
+                        const initials = providerKey === "gemini_web" ? "GM" : providerKey === "chatgpt_web" ? "CG" : "GW";
                         const isFlowConfigured = inst.enabled !== false;
                         
                         const wbStatus = inst.status || (isFlowConfigured ? "active" : "disabled");

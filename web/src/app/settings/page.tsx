@@ -17,6 +17,7 @@ import { FlowCard } from "./components/flow-card";
 import { ChatGPTOnboardCard } from "./components/chatgpt-onboard-card";
 import { ChatGPTWebCard } from "./components/chatgpt-web-card";
 import { GeminiWebCard } from "./components/gemini-web-card";
+import { GeminiWebApiCard } from "./components/gemini-web-api-card";
 import { ClaudeCard } from "./components/claude-card";
 import { CPAPoolDialog } from "./components/cpa-pool-dialog";
 import { CPAPoolsCard } from "./components/cpa-pools-card";
@@ -128,6 +129,14 @@ function SettingsPageContent() {
           icon={<span className="text-lg">♊</span>}
         >
           <GeminiWebCard />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Gemini Web API (Cookie 1PSID)"
+          description="Lấy cookie __Secure-1PSID từ profile Google → gọi thẳng API ẩn của gemini.google.com. Rất nhanh, hỗ trợ file/vision. Dùng chung browser profile với ChatGPT/Flow."
+          icon={<span className="text-lg">♊</span>}
+        >
+          <GeminiWebApiCard />
         </SettingsSection>
 
         <SettingsSection

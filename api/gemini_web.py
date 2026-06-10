@@ -63,13 +63,35 @@ def _solver_cfg() -> dict[str, str]:
 
 def _profiles() -> list[str]:
     cfg = _cfg()
+    profiles: list[str] = []
+    
+    for entry in (cfg.get("accounts") or []):
+        if isinstance(entry, dict):
+            p = str(entry.get("profile") or "").strip()
+            if p and p not in profiles:
+                profiles.append(p)
+                
     profs = cfg.get("profiles")
-    if isinstance(profs, list) and profs:
-        return [str(p) for p in profs if str(p).strip()]
-    # fallback: dùng chính profile của gemini_web DOM scrape (đã login sẵn)
-    gw = (_config().data.get("providers") or {}).get("gemini_web") or {}
-    p = str(gw.get("profile") or "").strip()
-    return [p or "gemini-web-default"]
+    if isinstance(profs, list):
+        for p in profs:
+            p = str(p).strip()
+            if p and p not in profiles:
+                profiles.append(p)
+                
+    if not profiles:
+        # fallback: dùng chính profile của gemini_web DOM scrape (đã login sẵn)
+        gw = (_config().data.get("providers") or {}).get("gemini_web") or {}
+        gw_accs = gw.get("accounts") if isinstance(gw.get("accounts"), list) else []
+        for a in gw_accs:
+            if isinstance(a, dict):
+                p = str(a.get("profile") or "").strip()
+                if p and p not in profiles:
+                    profiles.append(p)
+        p = str(gw.get("profile") or "").strip()
+        if p and p not in profiles:
+            profiles.append(p)
+            
+    return profiles or ["gemini-web-default"]
 
 
 def _fetch_cookies_from_solver(profile: str) -> dict[str, str]:
