@@ -273,17 +273,14 @@ def create_router() -> APIRouter:
                 "total": len(builtin_list),
             })
 
-        def _collect_web_accounts(cfg: dict) -> list[dict]:
+        def _collect_web_accounts(cfg: dict, provider_type: str) -> list[dict]:
             """Build a Flow-style instances list from either the legacy
             single-`profile` field or the new `accounts: [{profile,label,plan}]`
             array. Both shapes are accepted so existing deployments don't
             break when the config gets migrated.
 
-            `plan` is read directly from the config (cached value from
-            the last captcha-solver scrape) — refreshing it requires a
-            separate `POST /api/accounts/refresh-web-plan` call so we
-            don't run a fresh browser scrape on every Accounts page
-            load.
+            It also enriches the profiles with status and quota exhaustion stats
+            from the account_service pool (which persist via record_profile_quota_failure).
             """
             out: list[dict] = []
             ordered = []
@@ -298,14 +295,29 @@ def create_router() -> APIRouter:
             legacy = str(cfg.get("profile") or "").strip()
             if legacy and not any(x["profile"] == legacy for x in ordered):
                 ordered.insert(0, {"profile": legacy, "label": legacy, "plan": None})
+            
+            # Lookup in account_service
+            pool_accs = {a.get("access_token"): a for a in accounts if str(a.get("type")) == provider_type}
+
             for idx, item in enumerate(ordered):
+                prof = item["profile"]
+                pool_data = pool_accs.get(prof) || {}
                 out.append({
                     "ordinal": idx + 1,
                     "is_primary": idx == 0,
-                    "profile": item["profile"],
+                    "profile": prof,
+                    "access_token": prof,  # needed for UI delete tokens / matching
                     "label": item["label"],
                     "plan": item.get("plan"),
                     "enabled": item.get("enabled") is not False,
+                    "status": pool_data.get("status") || "active",
+                    "success": int(pool_data.get("success") || 0),
+                    "fail": int(pool_data.get("fail") || 0),
+                    "last_used_at": pool_data.get("last_used_at") || "",
+                    "last_quota_exhausted": pool_data.get("last_quota_exhausted") || "",
+                    "last_quota_exhausted_at": pool_data.get("last_quota_exhausted_at") || "",
+                    "last_image_failed_at": pool_data.get("last_image_failed_at") || "",
+                    "last_analysis_failed_at": pool_data.get("last_analysis_failed_at") || "",
                 })
             return out
 
@@ -317,7 +329,7 @@ def create_router() -> APIRouter:
         # `profile` field for backward compatibility.
         gw_cfg = providers_cfg.get("gemini_web") or {}
         if gw_cfg.get("enabled"):
-            gw_items = _collect_web_accounts(gw_cfg)
+            gw_items = _collect_web_accounts(gw_cfg, "gemini_web")
             if gw_items:
                 tree.append({
                     "provider": "Gemini Web",
@@ -326,6 +338,20 @@ def create_router() -> APIRouter:
                     "instances": gw_items,
                     "total": len(gw_items),
                     "captcha_solver_url": gw_cfg.get("captcha_solver_url") or "",
+                })
+
+        # ── ChatGPT Web profile branch ──
+        cgw_cfg = providers_cfg.get("chatgpt_web") or {}
+        if cgw_cfg.get("enabled"):
+            cgw_items = _collect_web_accounts(cgw_cfg, "chatgpt_web")
+            if cgw_items:
+                tree.append({
+                    "provider": "ChatGPT Web",
+                    "icon": "chatgpt",
+                    "type": "chatgpt_web",
+                    "instances": cgw_items,
+                    "total": len(cgw_items),
+                    "captcha_solver_url": cgw_cfg.get("captcha_solver_url") or "",
                 })
 
         # ── Google Labs Flow accounts branch ──

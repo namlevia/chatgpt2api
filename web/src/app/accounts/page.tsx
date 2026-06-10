@@ -1312,13 +1312,37 @@ function AccountsPageContent() {
                         </div>
                       ))}
 
-                      {/* Gemini Web / ChatGPT Web profile rows — same shape as
-                          flow rows. Each row maps 1:1 to a `providers.<key>.accounts[]`
-                          entry, with toggle/delete actions that mutate the config. */}
+                      {/* Gemini Web / ChatGPT Web profile rows — same rich UX as Claude.
+                          Reads from config but merges with account_service for quota/status. */}
                       {(provider.type === "gemini_web" || provider.type === "chatgpt_web") && provider.instances?.map((inst: any) => {
                         const providerKey = provider.type as "gemini_web" | "chatgpt_web";
                         const tagLabel = providerKey === "gemini_web" ? "Gemini Web" : "ChatGPT Web";
                         const initials = providerKey === "gemini_web" ? "GM" : "CG";
+                        const isFlowConfigured = inst.enabled !== false;
+                        
+                        const wbStatus = inst.status || (isFlowConfigured ? "active" : "disabled");
+                        const statusColor =
+                          !isFlowConfigured ? "bg-slate-300"
+                          : wbStatus === "active" ? "bg-gradient-to-br from-indigo-500 to-blue-600"
+                          : wbStatus === "error" ? "bg-gradient-to-br from-rose-500 to-red-600"
+                          : wbStatus === "limited" ? "bg-gradient-to-br from-amber-400 to-orange-500"
+                          : "bg-slate-300";
+
+                        // Quota exhausted badges
+                        const wbExhausted: string[] = [];
+                        if (inst.last_image_failed_at) {
+                          const at = inst.last_image_failed_at.split(" ")[1] || "gần đây";
+                          wbExhausted.push(`Gửi ảnh lúc ${at}`);
+                        }
+                        if (inst.last_analysis_failed_at) {
+                          const at = inst.last_analysis_failed_at.split(" ")[1] || "gần đây";
+                          wbExhausted.push(`Phân tích DL lúc ${at}`);
+                        }
+                        if (inst.last_quota_exhausted === "text_limit" && inst.last_quota_exhausted_at) {
+                          const at = inst.last_quota_exhausted_at.split(" ")[1] || "gần đây";
+                          wbExhausted.push(`Text lúc ${at}`);
+                        }
+
                         return (
                         <div key={`${providerKey}:${inst.profile}`}>
                           <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 transition-colors">
@@ -1333,42 +1357,61 @@ function AccountsPageContent() {
                             >
                               #{inst.ordinal}
                             </span>
-                            <div className={cn(
-                              "size-8 shrink-0 rounded-full flex items-center justify-center",
-                              inst.enabled === false
-                                ? "bg-slate-300"
-                                : "bg-gradient-to-br from-indigo-500 to-blue-600"
-                            )}>
+                            <div className={cn("size-8 shrink-0 rounded-full flex items-center justify-center", statusColor)}>
                               <span className="text-[10px] font-bold text-white">{initials}</span>
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-1.5">
-                                <span className="text-[13px] font-semibold text-slate-800 truncate">{inst.label || inst.profile}</span>
-                                <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-indigo-50 text-indigo-700 border border-indigo-200">
-                                  {tagLabel}
-                                </Badge>
-                                {inst.plan && (
-                                  <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-amber-50 text-amber-700 border border-amber-200">
-                                    {inst.plan}
+                              <div className="flex flex-col gap-1">
+                                <div className="flex items-center gap-1.5">
+                                  <span className="text-[13px] font-semibold text-slate-800 truncate max-w-[180px]">{inst.label || inst.profile}</span>
+                                  <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-indigo-50 text-indigo-700 border border-indigo-200">
+                                    {tagLabel}
                                   </Badge>
-                                )}
-                                {inst.enabled === false && (
-                                  <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-slate-100 text-slate-500 border border-slate-200">
-                                    disabled
-                                  </Badge>
+                                  {inst.plan && (
+                                    <Badge variant="secondary" className="rounded text-[10px] px-1 py-0 bg-amber-50 text-amber-700 border border-amber-200">
+                                      {inst.plan}
+                                    </Badge>
+                                  )}
+                                  <span className={cn(
+                                    "inline-flex items-center gap-0.5 rounded text-[10px] px-1 py-0",
+                                    !isFlowConfigured ? "bg-slate-100 text-slate-500 border border-slate-200"
+                                    : wbStatus === "active" ? "bg-emerald-500/10 text-emerald-600"
+                                    : wbStatus === "error" ? "bg-rose-500/10 text-rose-500"
+                                    : "bg-amber-500/10 text-amber-600"
+                                  )}>
+                                    {isFlowConfigured && (
+                                      <span className={cn("size-1.5 rounded-full",
+                                        wbStatus === "active" ? "bg-emerald-400"
+                                        : wbStatus === "error" ? "bg-rose-400"
+                                        : "bg-amber-400"
+                                      )} />
+                                    )}
+                                    {isFlowConfigured ? translateStatus(wbStatus, lang) : "disabled"}
+                                  </span>
+                                </div>
+                                {(wbExhausted.length > 0 || true) && (
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <code className="text-[10px] text-slate-400">profile: {inst.profile}</code>
+                                    {wbExhausted.map(f => (
+                                      <Badge key={`wb-ex-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-rose-50 text-rose-500 border border-rose-100 font-medium">
+                                        Hết {f}
+                                      </Badge>
+                                    ))}
+                                  </div>
                                 )}
                               </div>
-                              <div className="flex items-center gap-2 mt-0.5">
-                                <code className="text-[10px] text-slate-400">profile: {inst.profile}</code>
-                              </div>
+                            </div>
+                            <div className="hidden sm:flex items-center gap-2 text-[11px]">
+                              <span className="text-emerald-600">{inst.success ?? 0}✓</span>
+                              <span className="text-rose-400">{inst.fail ?? 0}✗</span>
                             </div>
                             <div className="flex items-center gap-1 text-slate-400" onClick={(e) => e.stopPropagation()}>
                               <button
                                 className="rounded p-0.5 hover:bg-amber-50 hover:text-amber-600"
                                 onClick={() => void mutateProviderAccounts(providerKey, inst.profile, "toggle")}
-                                title={inst.enabled === false ? "Kích hoạt" : "Vô hiệu hóa"}
+                                title={!isFlowConfigured ? "Kích hoạt" : "Vô hiệu hóa"}
                               >
-                                {inst.enabled === false ? <Power className="size-3" /> : <PowerOff className="size-3" />}
+                                {!isFlowConfigured ? <Power className="size-3" /> : <PowerOff className="size-3" />}
                               </button>
                               <button
                                 className="rounded p-0.5 hover:bg-rose-50 hover:text-rose-500"
