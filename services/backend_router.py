@@ -46,6 +46,8 @@ PROVIDER_PREFIXES: dict[str, str] = {
     "cc/": "claude",
     "claude/": "claude",  # claude.ai free (sessionKey) — same backend as /v1/claude/*
     "clf/": "claude",     # alias of claude/
+    "gma/": "gemini_web_api",         # gemini.google.com qua cookie 1PSID (gemini_webapi)
+    "gemini-web/": "gemini_web_api",  # alias of gma/
     "nv/": "nvidia_nim",
     "ag/": "antigravity",
 }

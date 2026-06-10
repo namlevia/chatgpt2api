@@ -857,6 +857,11 @@ def _dispatch(route, messages, tools, tool_choice, body):
         # HA/automations can pick claude models from /v1/models directly.
         from api.claude import handle_claude_chat
         return handle_claude_chat(route.model, messages, body.get("stream"), body)
+    elif route.provider == "gemini_web_api":
+        # gemini.google.com qua cookie 1PSID (gma/ | gemini-web/) — HTTP API
+        # trực tiếp (gemini_webapi), nhanh hơn DOM scrape gmw/.
+        from api.gemini_web import handle_gemini_web_api_chat
+        return handle_gemini_web_api_chat(route.model, messages, body.get("stream"), body)
     else:
         logger.warning({"event": "unknown_provider", "provider": route.provider, "fallback": "chatgpt_free"})
         from services.providers.chatgpt_free import handle_free_chat

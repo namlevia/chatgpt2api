@@ -539,7 +539,7 @@ def invalidate_models_cache():
         pass
 
 
-_DYNAMIC_PREFIXES = ("gmw/", "claude/")
+_DYNAMIC_PREFIXES = ("gmw/", "claude/", "gma/")
 
 
 def _apply_enabled_filter(data: list[dict]) -> list[dict]:
@@ -792,6 +792,14 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
         if mid not in seen:
             seen.add(mid)
             data.append({"id": mid, "object": "model", "created": 0, "owned_by": "claude"})
+
+    # Gemini web-cookie API models (gma/ — gemini.google.com qua 1PSID)
+    gma_models = ["gma/auto", "gma/gemini-3-flash", "gma/gemini-3-pro",
+                  "gma/gemini-3-flash-thinking"]
+    for mid in gma_models:
+        if mid not in seen:
+            seen.add(mid)
+            data.append({"id": mid, "object": "model", "created": 0, "owned_by": "gemini_web_api"})
 
     logger.info({"event": "list_models_done", "total_models": len(data)})
     # Save to persistent disk cache (always UNFILTERED — apply_filter is applied at read time)

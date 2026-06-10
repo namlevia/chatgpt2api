@@ -1099,6 +1099,35 @@ async def api_session_close(profile: str) -> dict[str, Any]:
     return {"profile": profile, "closed": closed}
 
 
+@app.get("/v1/gemini-web/{profile}/cookies", dependencies=[Depends(require_api_key)])
+async def api_gemini_web_cookies(profile: str) -> dict[str, Any]:
+    """Export Google session cookies từ profile đã login.
+
+    Trả __Secure-1PSID / __Secure-1PSIDTS để chatgpt2api (gma/ provider,
+    lib gemini_webapi) gọi thẳng HTTP API gemini.google.com — không cần DOM.
+    Pattern y hệt /v1/claude-web/{profile}/session của Claude.
+    """
+    ctx = pool.get_cached(profile)
+    if ctx is None:
+        try:
+            ctx = await pool.get(profile)
+        except Exception as exc:
+            raise HTTPException(status_code=503, detail=f"cannot load profile: {exc}") from exc
+    try:
+        cookies = await ctx.cookies("https://gemini.google.com")
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"profile context dead: {exc}") from exc
+    wanted = {"__Secure-1PSID", "__Secure-1PSIDTS"}
+    out = {c["name"]: c["value"] for c in cookies
+           if c.get("name") in wanted and c.get("value")}
+    if "__Secure-1PSID" not in out:
+        raise HTTPException(
+            status_code=404,
+            detail="profile has no Google session (__Secure-1PSID missing) — onboard first",
+        )
+    return {"profile": profile, "cookies": out}
+
+
 # ── ChatGPT onboard ──────────────────────────────────────────────────────
 
 class ChatGPTOnboardReq(BaseModel):
