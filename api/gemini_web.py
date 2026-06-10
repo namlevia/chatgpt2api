@@ -232,11 +232,25 @@ def _resolve_model(model: str):
         try:
             from services.config import config as _config
             ms = _config.data.get("model_settings") or {}
+            
+            # 1. Check explicit default_model
             default_model = (ms.get("default_models") or {}).get("gemini_web_api")
             if default_model:
                 m = str(default_model).strip()
                 if m.startswith("gma/"):
                     m = m[4:]
+                    
+            # 2. Fallback to first enabled model
+            if not m or m == "auto":
+                enabled = (ms.get("enabled_models") or {}).get("gemini_web_api")
+                if isinstance(enabled, list):
+                    for em in enabled:
+                        em = str(em).strip()
+                        if em.startswith("gma/"):
+                            em = em[4:]
+                        if em and em != "auto":
+                            m = em
+                            break
         except Exception:
             pass
 
