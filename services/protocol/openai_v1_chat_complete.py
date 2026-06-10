@@ -356,6 +356,28 @@ def _run_pipeline_combo(
 
 
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
+    """Wrapper: lớp ký ức OpenMemory (mặc định TẮT) bọc ngoài flow chat chính.
+
+    prepare() recall + inject ký ức liên quan vào messages; capture() lưu lượt
+    chat sau khi có response (tee stream, thread nền). Mọi lỗi memory đều nuốt
+    — flow chatgpt/gemini/claude/HA không đổi khi memory tắt hoặc chết.
+    """
+    mem_ctx = None
+    try:
+        from services.memory_service import memory_service
+        mem_ctx = memory_service.prepare(body)
+    except Exception:
+        mem_ctx = None
+    result = _handle_main(body)
+    if mem_ctx is not None:
+        try:
+            result = mem_ctx.capture(result)
+        except Exception:
+            pass
+    return result
+
+
+def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
     try:
         import json
         with open("/tmp/last_req.json", "w", encoding="utf-8") as f:
