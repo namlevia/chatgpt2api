@@ -200,6 +200,9 @@ _CONSENT_SCREEN_HINTS = (
     "verify it's you", "xác minh là bạn", "xac minh la ban",
     "choose an account", "chọn một tài khoản", "chon mot tai khoan",
     "sign in to", "đăng nhập vào", "dang nhap vao",
+    "đăng nhập lại vào", "dang nhap lai vao",
+    "bạn đang đăng nhập", "ban dang dang nhap",
+    "đăng nhập bằng google", "dang nhap bang google",
 )
 
 # Affirmative button text — matched against innerText / aria-label
