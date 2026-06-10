@@ -104,6 +104,10 @@ type ModelInfo = {
 
 type ComboModels = Record<string, string[]>;
 
+// Combo Code (pipeline bố-con) — config key riêng `pipeline_models`,
+// TÁCH BIỆT hoàn toàn với combo_models: BỐ lập kế hoạch, CON viết code.
+type PipelineModels = Record<string, { architects: string[]; editors: string[] }>;
+
 const CAP_COLORS: Record<string, string> = {
   chat: "bg-blue-500/10 text-blue-400 border-blue-500/20",
   vision: "bg-purple-500/10 text-purple-400 border-purple-500/20",
@@ -215,6 +219,14 @@ export default function CombosPage() {
   const [dropdownOpen, setDropdownOpen] = useState(false);
   const [editDropdownOpen, setEditDropdownOpen] = useState(false);
   const [modelSearch, setModelSearch] = useState("");
+  // ── Combo Code (pipeline bố-con) — state riêng, không dính combo thường ──
+  const [pipelines, setPipelines] = useState<PipelineModels>({});
+  const [plName, setPlName] = useState("");
+  const [plArchitect, setPlArchitect] = useState("");
+  const [plEditors, setPlEditors] = useState<string[]>([]);
+  const [plArchOpen, setPlArchOpen] = useState(false);
+  const [plEdOpen, setPlEdOpen] = useState(false);
+  const [plError, setPlError] = useState("");
 
   useEffect(() => { loadAll(); }, []);
 
@@ -227,6 +239,7 @@ export default function CombosPage() {
       ]);
       const config = (comboRes.data as any)?.config || {};
       setCombos(config.combo_models || {});
+      setPipelines(config.pipeline_models || {});
       setAllModels((modelsRes.data as any)?.models?.filter((m: any) => m.enabled !== false) || []);
     } catch (e) { console.error("Failed to load", e); }
     finally { setLoading(false); }
@@ -243,6 +256,51 @@ export default function CombosPage() {
       await loadAll();
     }
     setTimeout(() => setSaved(false), 2000);
+  }
+
+  // ── Combo Code (pipeline bố-con) ──
+  async function savePipelines(updated: PipelineModels) {
+    setPipelines(updated); setSaved(true); setPlError("");
+    try {
+      const res = await request.post("/api/settings", { pipeline_models: updated });
+      const cfg = (res.data as any)?.config || {};
+      setPipelines(cfg.pipeline_models || {});
+    } catch (e: any) {
+      setPlError(e?.response?.data?.detail?.error || e?.message || t("saveError"));
+      await loadAll();
+    }
+    setTimeout(() => setSaved(false), 2000);
+  }
+
+  function addPipeline() {
+    const name = plName.trim();
+    if (!name) { setPlError("Cần đặt tên (vd: code)"); return; }
+    if (!plArchitect) { setPlError("Cần chọn model BỐ"); return; }
+    if (plEditors.length < 1) { setPlError("Cần ít nhất 1 model CON"); return; }
+    savePipelines({ ...pipelines, [name]: { architects: [plArchitect], editors: [...plEditors] } });
+    setPlName(""); setPlArchitect(""); setPlEditors([]);
+  }
+
+  function removePipeline(name: string) {
+    const updated = { ...pipelines }; delete updated[name];
+    savePipelines(updated);
+  }
+
+  function editPipeline(name: string) {
+    const p = pipelines[name];
+    if (!p) return;
+    setPlName(name);
+    setPlArchitect((p.architects || [])[0] || "");
+    setPlEditors([...(p.editors || [])]);
+    setPlError("");
+  }
+
+  function movePlEditor(idx: number, dir: -1 | 1) {
+    const j = idx + dir;
+    if (j < 0 || j >= plEditors.length) return;
+    const updated = [...plEditors];
+    [updated[idx], updated[j]] = [updated[j], updated[idx]];
+    setPlEditors(updated);
   }
 
   function addCombo() {
@@ -324,6 +382,88 @@ export default function CombosPage() {
         <span className="inline-flex items-center gap-1.5 rounded-lg border border-blue-500/20 bg-blue-500/10 px-3 py-1.5 text-xs text-blue-400"><MessageSquare className="size-3" /> {t("chat")}: {counts.chat}</span>
         <span className="inline-flex items-center gap-1.5 rounded-lg border border-purple-500/20 bg-purple-500/10 px-3 py-1.5 text-xs text-purple-400"><Eye className="size-3" /> {t("vision")}: {counts.vision}</span>
         <span className="inline-flex items-center gap-1.5 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-400"><ImageIcon className="size-3" /> {t("imageGen")}: {counts.image}</span>
+      </div>
+
+      {/* ── Combo Code (pipeline bố-con) — KHU RIÊNG, tách biệt combo thường ── */}
+      <div className="rounded-[16px] p-6 border-2 border-violet-300/60 bg-violet-50/40">
+        <div className="mb-1 flex items-center gap-2.5">
+          <div className="flex size-9 items-center justify-center rounded-[10px] bg-violet-100"><Combine className="size-[18px] text-violet-500" /></div>
+          <h3 className="text-[15px] font-bold text-slate-900">Combo Code — Pipeline bố-con</h3>
+          <span className="rounded-md bg-violet-100 px-2 py-0.5 text-[11px] font-medium text-violet-600">dành cho viết code</span>
+        </div>
+        <p className="mb-4 text-xs text-slate-500">
+          <span className="font-semibold text-amber-600">BỐ</span> (model mạnh) lập kế hoạch ngắn → <span className="font-semibold text-emerald-600">CON</span> (model rẻ/free) viết code theo kế hoạch; CON sau là fallback của CON trước. Khu này tách biệt hoàn toàn với combo thường bên dưới.
+        </p>
+
+        {/* Form tạo/sửa */}
+        <div className="mb-4 space-y-2">
+          <input type="text" value={plName} onChange={(e) => setPlName(e.target.value)} placeholder="Tên combo code (vd: code)" className="w-full rounded-lg border border-stone-300 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-violet-400 focus:outline-none" />
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-amber-500/10 text-amber-600 border-amber-500/20 shrink-0 w-24 text-center">BỐ · kế hoạch</span>
+            <button type="button" onClick={() => setPlArchOpen(true)} className="flex flex-1 items-center justify-between rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm hover:border-violet-400 transition">
+              <span className={plArchitect ? "font-mono text-xs text-stone-800" : "text-stone-400"}>{plArchitect || "Chọn model BỐ (mạnh, để lập kế hoạch)"}</span>
+              <ChevronDown className="size-4 text-stone-500" />
+            </button>
+            {plArchitect && <button type="button" onClick={() => setPlArchitect("")} className="rounded p-1 text-stone-400 hover:bg-rose-50 hover:text-rose-500"><X className="size-3.5" /></button>}
+          </div>
+          {plEditors.map((id, idx) => (
+            <div key={idx} className="flex items-center gap-2">
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-500/10 text-emerald-600 border-emerald-500/20 shrink-0 w-24 text-center">CON #{idx + 1} · code</span>
+              <span className="flex-1 rounded-lg bg-white border border-stone-200 px-3 py-2 text-xs font-mono text-stone-800">{id}</span>
+              <div className="flex flex-col gap-0.5">
+                <button type="button" onClick={() => movePlEditor(idx, -1)} disabled={idx === 0} className="rounded p-0.5 text-stone-400 hover:bg-slate-100 disabled:opacity-30"><ArrowUp className="size-3" /></button>
+                <button type="button" onClick={() => movePlEditor(idx, 1)} disabled={idx === plEditors.length - 1} className="rounded p-0.5 text-stone-400 hover:bg-slate-100 disabled:opacity-30"><ArrowDown className="size-3" /></button>
+              </div>
+              <button type="button" onClick={() => setPlEditors(plEditors.filter((_, i) => i !== idx))} className="rounded p-1 text-stone-400 hover:bg-rose-50 hover:text-rose-500"><X className="size-3.5" /></button>
+            </div>
+          ))}
+          <div className="flex gap-2">
+            <button type="button" onClick={() => setPlEdOpen(true)} className="flex flex-1 items-center justify-between rounded-lg border border-dashed border-stone-300 bg-white px-3 py-2 text-sm text-stone-500 hover:border-violet-400 transition">
+              <span>+ Thêm model CON (rẻ/free, để viết code)</span>
+              <ChevronDown className="size-4 text-stone-500" />
+            </button>
+            <button type="button" onClick={addPipeline} disabled={!plName.trim() || !plArchitect || plEditors.length < 1} className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-4 py-2 text-sm font-medium text-white transition hover:bg-violet-700 disabled:opacity-40 shrink-0">
+              <Plus className="size-4" /> {pipelines[plName.trim()] ? "Cập nhật" : "Thêm"}
+            </button>
+          </div>
+          {plError && <p className="text-xs text-red-400">{plError}</p>}
+        </div>
+        <ModelPickerModal open={plArchOpen} onClose={() => setPlArchOpen(false)} title="Chọn model BỐ (lập kế hoạch)" models={filteredModels} excludeIds={plEditors} selectedIds={plArchitect ? [plArchitect] : []} onPick={(id) => { setPlArchitect(id); setPlArchOpen(false); }} showSearch onSearchChange={setModelSearch} emptyMessage={t("allModelsSelected")} />
+        <ModelPickerModal open={plEdOpen} onClose={() => setPlEdOpen(false)} title="Thêm model CON (viết code)" models={filteredModels} excludeIds={[...plEditors, ...(plArchitect ? [plArchitect] : [])]} onPick={(id) => { setPlEditors([...plEditors, id]); setPlEdOpen(false); }} showSearch onSearchChange={setModelSearch} emptyMessage={t("allModelsSelected")} />
+
+        {/* Danh sách combo code hiện có */}
+        {Object.entries(pipelines).length > 0 && (
+          <div className="space-y-2">
+            {Object.entries(pipelines).map(([name, p]) => (
+              <div key={name} className="rounded-[12px] border border-violet-200/60 bg-white p-4">
+                <div className="mb-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <h4 className="text-[14px] font-bold text-slate-900">{name}</h4>
+                    <span className="rounded-md bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-600">pipeline bố-con</span>
+                  </div>
+                  <div className="flex items-center gap-1">
+                    <button type="button" onClick={() => editPipeline(name)} className="rounded-[8px] p-1.5 text-slate-400 hover:bg-slate-100 hover:text-slate-700" title="Chỉnh sửa"><Pencil className="size-3.5" /></button>
+                    <button type="button" onClick={() => removePipeline(name)} className="rounded-[8px] p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-500"><Trash2 className="size-3.5" /></button>
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  {(p.architects || []).map((m, i) => (
+                    <div key={`a${i}`} className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-amber-500/10 text-amber-600 border-amber-500/20 w-24 text-center shrink-0">BỐ · kế hoạch</span>
+                      <span className="text-xs font-mono text-stone-800">{m}</span>
+                    </div>
+                  ))}
+                  {(p.editors || []).map((m, i) => (
+                    <div key={`e${i}`} className="flex items-center gap-2">
+                      <span className="text-[10px] font-bold px-1.5 py-0.5 rounded border bg-emerald-500/10 text-emerald-600 border-emerald-500/20 w-24 text-center shrink-0">CON #{i + 1} · code</span>
+                      <span className="text-xs font-mono text-stone-800">{m}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Add new combo */}

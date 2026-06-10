@@ -322,6 +322,29 @@ class BackendRouter:
         model_lower = model_str.lower().strip()
         return any(k.lower().strip() == model_lower for k in combos)
 
+    def get_pipeline(self, name: str) -> dict[str, list[str]] | None:
+        """Combo Code (pipeline bố-con) — TÁCH BIỆT hoàn toàn với combo_models.
+
+        Config key riêng `pipeline_models`:
+            {"code": {"architects": ["claude/auto"], "editors": ["cgf/auto", ...]}}
+        Trả {"architects": [...], "editors": [...]} hoặc None (case-insensitive).
+        """
+        pipelines = config.data.get("pipeline_models") or {}
+        if not isinstance(pipelines, dict):
+            return None
+        name_lower = str(name or "").lower().strip()
+        for k, v in pipelines.items():
+            if k.lower().strip() != name_lower or not isinstance(v, dict):
+                continue
+            architects = [str(m).strip() for m in (v.get("architects") or []) if str(m).strip()]
+            editors = [str(m).strip() for m in (v.get("editors") or []) if str(m).strip()]
+            if architects and editors:
+                return {"architects": architects, "editors": editors}
+        return None
+
+    def is_pipeline(self, name: str) -> bool:
+        return self.get_pipeline(name) is not None
+
     def _get_combo_models(self, combo_name: str) -> list[str] | None:
         """Get combo model list by name (case-insensitive)."""
         combos = config.data.get("combo_models") or {}

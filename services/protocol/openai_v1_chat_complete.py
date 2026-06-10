@@ -227,12 +227,11 @@ def stream_image_chat_completion(image_outputs: Iterable[ImageOutput], model: st
 
 
 # ---------------------------------------------------------------------------
-# Pipeline combo — kiểu Aider architect/editor: "bố" (model mạnh) lập kế hoạch
-# ngắn, "con" (model rẻ/nhanh) viết code dài theo kế hoạch → tiết kiệm 30-50%
-# token đầu ra của model đắt. Tạo bằng UI combo sẵn có, không cần UI mới:
-# combo nào có entry "architect:<model>" sẽ chạy pipeline; entry
-# "editor:<model>" (hoặc entry trần) là chuỗi fallback cho tầng thực thi.
-# Ví dụ combo "code": ["architect:claude/auto", "editor:cgf/auto", "nv/..."]
+# Combo Code (pipeline bố-con) — kiểu Aider architect/editor: "bố" (model
+# mạnh) lập kế hoạch ngắn, "con" (model rẻ/nhanh) viết code dài theo kế hoạch
+# → tiết kiệm 30-50% token đầu ra của model đắt. TÁCH BIỆT hoàn toàn với
+# combo thường: config key riêng `pipeline_models` (khu "Combo Code" trên UI):
+#   {"code": {"architects": ["claude/auto"], "editors": ["cgf/auto", "gma/3.1-pro"]}}
 
 _PIPELINE_ARCHITECT_PROMPT = (
     "Bạn là kiến trúc sư trưởng (architect). Phân tích yêu cầu và lập KẾ HOẠCH "
@@ -250,28 +249,6 @@ _PIPELINE_EDITOR_PROMPT = (
 )
 
 _PIPELINE_PLAN_MAX_CHARS = 8000
-
-
-def _parse_pipeline_combo(combo_entries: list[str]) -> tuple[list[str], list[str]] | None:
-    """Tách combo thành (architects, editors); None nếu là combo fallback thường."""
-    architects: list[str] = []
-    editors: list[str] = []
-    for entry in combo_entries:
-        s = str(entry or "").strip()
-        low = s.lower()
-        if low.startswith("architect:"):
-            m = s.split(":", 1)[1].strip()
-            if m:
-                architects.append(m)
-        elif low.startswith("editor:"):
-            m = s.split(":", 1)[1].strip()
-            if m:
-                editors.append(m)
-        elif s:
-            editors.append(s)
-    if architects and editors:
-        return (architects, editors)
-    return None
 
 
 def _pipeline_extract_content(result: Any) -> str:
@@ -410,14 +387,14 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
         
     original_user_text = _extract_last_user_text(messages)
 
+    # Combo Code (pipeline bố-con) — config pipeline_models, TÁCH BIỆT hoàn
+    # toàn với combo_models bên dưới.
+    _pipeline = backend_router.get_pipeline(model)
+    if _pipeline:
+        return _run_pipeline_combo(model, _pipeline["architects"], _pipeline["editors"], messages, tools, tool_choice, body)
+
     # Check if this is a combo model — try each model until success
     if backend_router.is_combo(model):
-        # Pipeline combo (architect/editor): combo có entry "architect:<model>"
-        # chạy 2 tầng bố-con thay vì fallback chain thường.
-        _combo_entries = backend_router._get_combo_models(model) or []
-        _pipeline = _parse_pipeline_combo(_combo_entries)
-        if _pipeline:
-            return _run_pipeline_combo(model, _pipeline[0], _pipeline[1], messages, tools, tool_choice, body)
         routes = backend_router.route_combo(model)
         last_error = ""
 

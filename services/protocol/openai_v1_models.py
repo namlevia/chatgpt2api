@@ -508,6 +508,7 @@ def _load_cache_from_disk() -> dict[str, Any] | None:
                     if m.get("owned_by") == "chatgpt2api":
                         cache_combos.add(mid)
                 current_combos = set((config.data.get("combo_models") or {}).keys())
+                current_combos |= set((config.data.get("pipeline_models") or {}).keys())
                 if cache_combos != current_combos:
                     logger.info({"event": "models_cache_stale_combos", "cache": list(cache_combos), "config": list(current_combos)})
                     return None
@@ -586,6 +587,11 @@ def _apply_enabled_filter(data: list[dict]) -> list[dict]:
     combos = config.data.get("combo_models") or {}
     if isinstance(combos, dict):
         all_enabled |= set(combos.keys())
+
+    # Combo Code (pipeline bố-con) — config key riêng, tách biệt combo thường
+    pipelines = config.data.get("pipeline_models") or {}
+    if isinstance(pipelines, dict):
+        all_enabled |= set(pipelines.keys())
 
     all_enabled |= set(IMAGE_MODELS)
 
@@ -775,6 +781,18 @@ def list_models(force_refresh: bool = False, apply_filter: bool = False) -> dict
                 seen.add(combo_name)
                 data.append({
                     "id": combo_name, "object": "model", "created": 0,
+                    "owned_by": "chatgpt2api",
+                })
+
+    # Add Combo Code (pipeline bố-con) from config — owned_by "chatgpt2api"
+    # để khớp logic verify cache phía trên
+    pipelines = config.data.get("pipeline_models") or {}
+    if isinstance(pipelines, dict):
+        for pipeline_name in pipelines:
+            if pipeline_name not in seen:
+                seen.add(pipeline_name)
+                data.append({
+                    "id": pipeline_name, "object": "model", "created": 0,
                     "owned_by": "chatgpt2api",
                 })
 
