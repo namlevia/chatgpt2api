@@ -20,9 +20,11 @@ const PROVIDER_LABELS: Record<string, { label: string; color: string; tint: stri
   chatgpt2api: { label: "Hệ thống (combo)", color: "#F59E0B", tint: "amber" },
   flow: { label: "Google Labs Flow", color: "#34A853", tint: "emerald" },
   claude: { label: "Claude Web", color: "#D97757", tint: "amber" },
+  gemini_web_api: { label: "Gemini Web API", color: "#9333EA", tint: "violet" },
+  gemini_web: { label: "Gemini Web (Scrape)", color: "#9333EA", tint: "violet" },
 };
 
-const CORE_MODELS = ["ha-agent", "chatgpt/auto", "cgf/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto", "flow/auto", "claude/auto", "cgw/auto", "gmw/auto"];
+const CORE_MODELS = ["ha-agent", "chatgpt/auto", "cgf/auto", "oc/auto", "gemini_free/auto", "cx/auto", "ag/auto", "flow/auto", "claude/auto", "cgw/auto", "gmw/auto", "gma/auto"];
 
 export default function ModelsPage() {
   const [available, setAvailable] = useState<Record<string, string[]>>({});
