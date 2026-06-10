@@ -173,7 +173,7 @@ export function GeminiWebApiCard() {
       
       if (initial.state === "success") {
         setRunning(false);
-        void handleSuccess(initial);
+        void handleSuccess(initial as OnboardState);
       } else if (initial.state === "failed") {
         setRunning(false);
         toast.error(`Reuse fail: ${initial.error || initial.message}`);
