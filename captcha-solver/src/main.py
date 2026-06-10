@@ -890,17 +890,11 @@ async def api_gemini_web_models(profile: str, headless: bool = True, timeout: in
 
 @app.post("/v1/gemini-web/onboard", dependencies=[Depends(require_api_key)])
 async def api_gemini_web_onboard(req: GeminiWebOnboardReq) -> dict[str, Any]:
-    """Onboard a profile for Gemini Web (gemini.google.com).
-
-    Short-circuits to success if the profile already has a valid Google
-    session (from Flow / ChatGPT onboard). Otherwise runs the standard
-    Google login flow.
-    """
+    prefer = getattr(req, "prefer_method", "auth" if req.totp_secret else "tap")
     session = await start_gemini_web_login(
         profile=req.profile, email=req.email, password=req.password,
-        totp_secret=req.totp_secret,
+        totp_secret=req.totp_secret, prefer_method=prefer,
     )
-    # Auto-save credentials to shared accounts DB
     try: save_account(req.email, req.password, req.totp_secret, "")
     except Exception: pass
     return {
@@ -934,15 +928,10 @@ async def api_gemini_web_onboard_2fa_code(profile: str, req: TwoFactorCodeReq) -
 
 @app.post("/v1/claude-web/onboard", dependencies=[Depends(require_api_key)])
 async def api_claude_web_onboard(req: ClaudeWebOnboardReq) -> dict[str, Any]:
-    """Onboard a profile for Claude Web (claude.ai) via Google account.
-
-    Reuses the profile's existing Google session (from Flow / ChatGPT /
-    Gemini onboard) — no second 2FA — otherwise runs the standard Google
-    login. On success the response carries the scraped `sessionKey` cookie.
-    """
+    prefer = getattr(req, "prefer_method", "auth" if req.totp_secret else "tap")
     session = await start_claude_web_login(
         profile=req.profile, email=req.email, password=req.password,
-        totp_secret=req.totp_secret,
+        totp_secret=req.totp_secret, prefer_method=prefer,
     )
     try: save_account(req.email, req.password, req.totp_secret, "")
     except Exception: pass
@@ -1144,11 +1133,13 @@ class ChatGPT2FACodeReq(BaseModel):
 @app.post("/v1/chatgpt/onboard", dependencies=[Depends(require_api_key)])
 async def api_chatgpt_onboard(req: ChatGPTOnboardReq) -> dict[str, Any]:
     """Onboard ChatGPT via Google. If totp_secret provided, 2FA is automatic."""
+    prefer = getattr(req, "prefer_method", "auth" if req.totp_secret else "tap")
     session = await start_chatgpt_onboard(
         profile=req.profile,
         email=req.email,
         password=req.password,
         totp_secret=req.totp_secret,
+        prefer_method=prefer,
     )
     # Auto-save credentials to shared accounts DB
     try: save_account(req.email, req.password, req.totp_secret, "")
