@@ -204,6 +204,42 @@ _IMG_EXT = {"image/png": "png", "image/jpeg": "jpg", "image/jpg": "jpg",
             "image/gif": "gif", "image/webp": "webp"}
 
 
+def _downscale_image(data: bytes, mime: str) -> tuple[bytes, str]:
+    """Cap the longest side before upload (camera frames are 1920-2688px).
+
+    claude.ai charges vision tokens by pixel area, so smaller frames mean a
+    faster, cheaper analysis with no real loss for person/object detection.
+    Config key claude_vision_max_dim (default 896, 0 = off) mirrors the
+    chatgpt_vision_max_dim knob.
+    """
+    try:
+        max_dim = int(_config().data.get("claude_vision_max_dim", 896) or 0)
+    except Exception:
+        max_dim = 896
+    if not max_dim:
+        return data, mime
+    try:
+        from io import BytesIO
+        from PIL import Image
+        img = Image.open(BytesIO(data))
+        w, h = img.size
+        if max(w, h) <= max_dim:
+            return data, mime
+        scale = max_dim / float(max(w, h))
+        new_size = (max(1, round(w * scale)), max(1, round(h * scale)))
+        resized = img.convert("RGB") if img.mode not in ("RGB", "L") else img
+        resized = resized.resize(new_size, Image.LANCZOS)
+        buf = BytesIO()
+        resized.save(buf, format="JPEG", quality=85)
+        out = buf.getvalue()
+        _logger().info({"event": "claude_image_downscaled", "from": [w, h],
+                        "to": list(new_size), "bytes": [len(data), len(out)]})
+        return out, "image/jpeg"
+    except Exception as exc:
+        _logger().debug({"event": "claude_image_downscale_skipped", "error": str(exc)[:120]})
+        return data, mime
+
+
 def _extract_images(messages: list[dict[str, Any]]) -> list[tuple[bytes, str]]:
     """Pull (bytes, mime) for every OpenAI `image_url` part (data: URI or http URL)."""
     out: list[tuple[bytes, str]] = []
@@ -219,7 +255,7 @@ def _extract_images(messages: list[dict[str, Any]]) -> list[tuple[bytes, str]]:
                 try:
                     head, b64 = url.split(",", 1)
                     mime = (head[5:].split(";")[0] or "image/png").lower()
-                    out.append((base64.b64decode(b64), mime))
+                    out.append(_downscale_image(base64.b64decode(b64), mime))
                 except Exception:
                     pass
             elif url.startswith("http"):
@@ -227,7 +263,7 @@ def _extract_images(messages: list[dict[str, Any]]) -> list[tuple[bytes, str]]:
                     rr = requests.get(url, timeout=20, impersonate="chrome110")
                     if rr.status_code == 200 and rr.content:
                         mime = (rr.headers.get("content-type") or "image/png").split(";")[0].lower()
-                        out.append((rr.content, mime))
+                        out.append(_downscale_image(rr.content, mime))
                 except Exception:
                     pass
     return out
