@@ -851,6 +851,12 @@ def _dispatch(route, messages, tools, tool_choice, body):
         # 3rd path kept separate (đại ca's decision): raw OpenAI API key (sk-)
         # or `standard` JWT accounts → api.openai.com via custom:openai.
         return _handle_openai_api_chat(route.model, messages, tools, tool_choice, body.get("stream"), body)
+    elif route.provider == "claude":
+        # claude.ai free web (claude/ | clf/ | cc/) — same backend as the
+        # dedicated /v1/claude/* endpoint, reachable from the main route so
+        # HA/automations can pick claude models from /v1/models directly.
+        from api.claude import handle_claude_chat
+        return handle_claude_chat(route.model, messages, body.get("stream"), body)
     else:
         logger.warning({"event": "unknown_provider", "provider": route.provider, "fallback": "chatgpt_free"})
         from services.providers.chatgpt_free import handle_free_chat

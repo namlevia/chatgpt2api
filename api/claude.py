@@ -511,6 +511,29 @@ class ClaudeFreeBackend:
 _backend = ClaudeFreeBackend()
 
 
+def handle_claude_chat(
+    model: str,
+    messages: list[dict[str, Any]],
+    stream: Any,
+    body: dict[str, Any] | None = None,
+) -> dict[str, Any] | Iterator[dict[str, Any]]:
+    """Provider handler for the MAIN /v1/chat/completions router (claude/*,
+    clf/, cc/ models). Same ClaudeFreeBackend as the dedicated /v1/claude/*
+    endpoint; the route arrives with the prefix already stripped ("auto",
+    "sonnet-4.5-search", ...) which _resolve_model handles natively."""
+    if not _backend.is_available:
+        raise RuntimeError("Claude not configured (providers.claude.session_key)")
+    if stream:
+        return _backend.chat(messages, model)
+    content = _collect_text(_backend.chat(messages, model))
+    return {
+        "id": f"chatcmpl-{uuid.uuid4().hex}", "object": "chat.completion",
+        "created": int(time.time()), "model": model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Router (OpenAI-compatible, dedicated /v1/claude/* path)
 # ═══════════════════════════════════════════════════════════════════════════

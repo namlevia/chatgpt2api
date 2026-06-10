@@ -44,6 +44,8 @@ PROVIDER_PREFIXES: dict[str, str] = {
     "gh/": "github",
     "cu/": "cursor",
     "cc/": "claude",
+    "claude/": "claude",  # claude.ai free (sessionKey) — same backend as /v1/claude/*
+    "clf/": "claude",     # alias of claude/
     "nv/": "nvidia_nim",
     "ag/": "antigravity",
 }
