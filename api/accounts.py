@@ -301,7 +301,7 @@ def create_router() -> APIRouter:
 
             for idx, item in enumerate(ordered):
                 prof = item["profile"]
-                pool_data = pool_accs.get(prof) || {}
+                pool_data = pool_accs.get(prof) or {}
                 out.append({
                     "ordinal": idx + 1,
                     "is_primary": idx == 0,
@@ -310,14 +310,14 @@ def create_router() -> APIRouter:
                     "label": item["label"],
                     "plan": item.get("plan"),
                     "enabled": item.get("enabled") is not False,
-                    "status": pool_data.get("status") || "active",
-                    "success": int(pool_data.get("success") || 0),
-                    "fail": int(pool_data.get("fail") || 0),
-                    "last_used_at": pool_data.get("last_used_at") || "",
-                    "last_quota_exhausted": pool_data.get("last_quota_exhausted") || "",
-                    "last_quota_exhausted_at": pool_data.get("last_quota_exhausted_at") || "",
-                    "last_image_failed_at": pool_data.get("last_image_failed_at") || "",
-                    "last_analysis_failed_at": pool_data.get("last_analysis_failed_at") || "",
+                    "status": pool_data.get("status") or "active",
+                    "success": int(pool_data.get("success") or 0),
+                    "fail": int(pool_data.get("fail") or 0),
+                    "last_used_at": pool_data.get("last_used_at") or "",
+                    "last_quota_exhausted": pool_data.get("last_quota_exhausted") or "",
+                    "last_quota_exhausted_at": pool_data.get("last_quota_exhausted_at") or "",
+                    "last_image_failed_at": pool_data.get("last_image_failed_at") or "",
+                    "last_analysis_failed_at": pool_data.get("last_analysis_failed_at") or "",
                 })
             return out
 
