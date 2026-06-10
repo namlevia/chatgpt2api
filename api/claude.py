@@ -108,6 +108,10 @@ def _base_url() -> str:
 _SOLVER_KEY_TTL = 300.0
 _solver_key_cache: dict[str, tuple[float, str]] = {}
 
+# session_key → profile_name: populated when fetching from captcha-solver,
+# used by _record_quota_failure to persist failures against the stable profile.
+_profile_by_session: dict[str, str] = {}
+
 # ── Lỗi quota Claude → ánh xạ sang loại hạn mức ─────────────────────────────
 _QUOTA_PATTERNS: list[tuple[str, str]] = [
     ("rate limit",              "text_limit"),
@@ -176,6 +180,7 @@ def _fetch_session_key_from_solver(cfg: dict[str, Any], excluded_keys: set[str] 
                 key = str((resp.json() or {}).get("session_key") or "")
                 if key:
                     _solver_key_cache[profile] = (time.time(), key)
+                    _profile_by_session[key] = profile  # persist mapping
                     if key not in excluded:
                         return key
         except Exception as exc:
@@ -628,11 +633,36 @@ def _classify_quota_error(error_msg: str) -> str:
 
 
 def _record_quota_failure(session_key: str, quota_type: str, attempt: int) -> None:
-    """Write quota failure to account_service so UI and routing are updated."""
+    """Write quota failure to account_service so UI and routing are updated.
+
+    Handles both cases:
+    - account_service pool accounts (JWT as access_token) → direct update
+    - captcha-solver profiles (session_key from solver) → persist via profile name
+    """
     try:
         from services.account_service import account_service
         from datetime import datetime
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        # Case 1: captcha-solver profile — use stable profile name for persistence
+        profile = _profile_by_session.get(session_key)
+        if profile:
+            account_service.record_profile_quota_failure(
+                profile=profile,
+                quota_type=quota_type,
+                account_type="claude",
+            )
+            _logger().info({
+                "event": "claude_profile_rotate",
+                "reason": "quota_burnt",
+                "exhausted_item": quota_type,
+                "profile": profile,
+                "rotated_at": now_str,
+                "attempt": attempt,
+            })
+            return
+
+        # Case 2: account_service pool account (session_key IS the access_token)
         if quota_type == "file_upload":
             account_service.mark_image_failed(session_key)
         elif quota_type == "advanced_data_analysis":

@@ -34,6 +34,24 @@ from fastapi import HTTPException
 class AccountBusyError(Exception):
     pass
 
+
+def _persist_web_quota_failure(profile: str, account_type: str, is_image: bool = False) -> None:
+    """Persist quota failure for a web provider profile to account_service.
+
+    Auto-registers the profile on first failure (same as Claude). This ensures
+    quota badges survive container restarts and appear on the Accounts UI.
+    """
+    try:
+        from services.account_service import account_service
+        quota_type = "file_upload" if is_image else "text_limit"
+        account_service.record_profile_quota_failure(
+            profile=profile,
+            quota_type=quota_type,
+            account_type=account_type,
+        )
+    except Exception as exc:
+        logger.warning({"event": "web_quota_persist_failed", "profile": profile, "error": str(exc)[:120]})
+
 def _captcha_solver_cfg() -> dict[str, str]:
     """Reuse the captcha-solver connection settings from providers.flow."""
     providers = config.data.get("providers") or {}
@@ -454,6 +472,8 @@ def handle_gemini_web_chat(
             break
         except AccountBusyError as exc:
             last_exc = exc
+            is_img = bool(image_url)
+            _persist_web_quota_failure(profile, "gemini_web", is_image=is_img)
             logger.info({"event": "gemini_web_failover", "profile": profile, "reason": "busy_or_quota"})
             continue
         except Exception as exc:

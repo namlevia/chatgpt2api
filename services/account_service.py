@@ -463,6 +463,75 @@ class AccountService:
             self._accounts[access_token] = account
             self._save_accounts()
 
+    def record_profile_quota_failure(
+        self,
+        profile: str,
+        quota_type: str,
+        account_type: str = "claude",
+        email: str = "",
+    ) -> None:
+        """Persist a quota failure for a captcha-solver profile.
+
+        Auto-registers the profile in the account pool (using profile name as
+        access_token) if it has never been seen before, then writes the
+        appropriate failure timestamp so:
+          - The failure survives container restarts
+          - The UI shows the correct badge (Hết Gửi ảnh / Phân tích DL / Text)
+          - get_claude_session_key / get_text_access_token will skip it for 6h
+
+        quota_type: one of "file_upload", "advanced_data_analysis", "text_limit"
+        account_type: "claude" | "chatgpt_web" | "gemini_web"
+        """
+        if not profile:
+            return
+        now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        with self._lock:
+            if profile not in self._accounts:
+                # First time seeing this profile — auto-register it
+                seed: dict = {
+                    "access_token": profile,
+                    "type": account_type,
+                    "email": email or profile,
+                    "status": "active",
+                    "quota": 0,
+                    "image_quota_unknown": True,
+                    "success": 0,
+                    "fail": 0,
+                }
+                normalized = self._normalize_account(seed)
+                if normalized:
+                    self._accounts[profile] = normalized
+
+            current = self._accounts.get(profile)
+            if current is None:
+                return
+            next_item = dict(current)
+            next_item["last_quota_exhausted"] = quota_type
+            next_item["last_quota_exhausted_at"] = now_str
+
+            if quota_type == "file_upload":
+                next_item["last_image_failed_at"] = now_str
+            elif quota_type == "advanced_data_analysis":
+                next_item["last_analysis_failed_at"] = now_str
+            else:
+                # text_limit: demote by moving to end of dict (FIFO)
+                self._accounts.pop(profile, None)
+                next_item["status"] = "limited"
+
+            account = self._normalize_account(next_item)
+            if account:
+                self._accounts[profile] = account
+            self._save_accounts()
+
+        logger.info({
+            "event": "profile_quota_persisted",
+            "profile": profile,
+            "quota_type": quota_type,
+            "account_type": account_type,
+            "at": now_str,
+        })
+
     def remove_invalid_token(self, access_token: str, event: str) -> bool:
         if not config.auto_remove_invalid_accounts:
             self.update_account(access_token, {"status": "error", "quota": 0})
