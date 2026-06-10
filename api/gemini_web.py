@@ -119,21 +119,36 @@ def _fetch_cookies_from_solver(profile: str) -> dict[str, str]:
     return {}
 
 
-def _get_cookies() -> tuple[str, str]:
-    """(psid, psidts) — config tĩnh trước, rồi captcha-solver profiles."""
+def _get_cookies_ranked(required_features: list[str] = None) -> list[tuple[str, str, str]]:
+    """Return a list of (psid, psidts, profile) ranked by health/quota.
+    Falls back to single psid config if present."""
     cfg = _cfg()
     psid = str(cfg.get("psid") or "").strip()
     if psid:
-        return psid, str(cfg.get("psidts") or "").strip()
-    for profile in _profiles():
+        return [(psid, str(cfg.get("psidts") or "").strip(), "static-config")]
+        
+    from services.account_service import account_service
+    profiles = _profiles()
+    raw_accounts = [{"profile": p, "status": "active"} for p in profiles]
+    
+    ranked = account_service.normalize_and_rank_accounts(
+        raw_accounts,
+        account_type="gemini_web_api",
+        required_features=required_features or ["text"],
+    )
+    
+    results = []
+    for acc in ranked:
+        profile = acc.get("profile")
+        if not profile: continue
         c = _fetch_cookies_from_solver(profile)
         if c.get("__Secure-1PSID"):
-            return c["__Secure-1PSID"], c.get("__Secure-1PSIDTS", "")
-    return "", ""
-
+            results.append((c["__Secure-1PSID"], c.get("__Secure-1PSIDTS", ""), profile))
+            
+    return results
 
 def is_available() -> bool:
-    return bool(_get_cookies()[0])
+    return len(_get_cookies_ranked()) > 0
 
 
 # ── Dedicated asyncio loop (gemini_webapi là async-only) ────────────────────
@@ -333,13 +348,9 @@ def handle_gemini_web_api_chat(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | Iterator[dict[str, Any]]:
     """Provider handler cho router chính (gma/* models)."""
-    psid, psidts = _get_cookies()
-    if not psid:
-        raise RuntimeError(
-            "Gemini web-api not configured: set providers.gemini_web_api.psid "
-            "(cookie __Secure-1PSID) or onboard a gemini_web profile")
-
     from api.claude import _flatten_messages  # cùng pattern stateless prompt
+    from services.account_service import account_service
+
     prompt = _flatten_messages(messages)
     files = _prepare_files(messages)
     model_enum = _resolve_model(model)
@@ -348,20 +359,55 @@ def handle_gemini_web_api_chat(
     _logger().info({"event": "gma_request", "model": str(model_enum or "auto"),
                     "msg_count": len(messages or [])})
 
+    req_features = ["file_upload"] if files else ["text"]
+    available_creds = _get_cookies_ranked(required_features=req_features)
+    if not available_creds:
+        _cleanup(files)
+        raise RuntimeError(
+            "Gemini web-api not configured or all accounts exhausted: set providers.gemini_web_api.psid "
+            "(cookie __Secure-1PSID) or onboard a gemini_web profile")
+
     def _call_with_retry() -> str:
-        try:
-            client = _get_client(psid, psidts)
-            return _generate_text(client, prompt, files, model_enum)
-        except Exception as exc:
-            err = str(exc).lower()
-            if any(k in err for k in ("auth", "cookie", "1psid", "401", "403")):
-                _logger().warning({"event": "gma_auth_retry", "error": str(exc)[:120]})
-                _drop_client(psid)
-                p2, ts2 = _get_cookies()
-                if p2:
-                    client = _get_client(p2, ts2)
-                    return _generate_text(client, prompt, files, model_enum)
-            raise
+        last_exc = None
+        for psid, psidts, profile in available_creds:
+            try:
+                client = _get_client(psid, psidts)
+                text = _generate_text(client, prompt, files, model_enum)
+                
+                # Detect quota limits in text response
+                lower_text = str(text).lower()
+                if any(k in lower_text for k in ("reached your limit", "giới hạn", "usage cap", "hết lượt")):
+                    raise RuntimeError(f"QUOTA_EXHAUSTED: {text[:100]}")
+                    
+                return text
+            except Exception as exc:
+                err = str(exc).lower()
+                
+                # Quota exhaustion
+                if "quota_exhausted" in err:
+                    _logger().warning({"event": "gma_quota_hit", "profile": profile})
+                    if profile and profile != "static-config":
+                        account_service.record_profile_quota_failure(
+                            profile=profile,
+                            quota_type="file_upload" if files else "text_limit",
+                            account_type="gemini_web_api"
+                        )
+                    last_exc = exc
+                    continue
+                    
+                # Auth/Cookie invalidation
+                if any(k in err for k in ("auth", "cookie", "1psid", "401", "403")):
+                    _logger().warning({"event": "gma_auth_retry", "error": str(exc)[:120]})
+                    _drop_client(psid)
+                    last_exc = exc
+                    continue
+                    
+                raise exc
+        
+        # If we loop through all credentials and fail
+        if last_exc:
+            raise last_exc
+        raise RuntimeError("No available accounts to fulfill request")
 
     cid = f"chatcmpl-{uuid.uuid4().hex}"
     created = int(time.time())
