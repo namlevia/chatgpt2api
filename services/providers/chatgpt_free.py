@@ -281,10 +281,14 @@ def _try_free_with_token(
             return _prefetch_stream(gen, "chatgpt.com addon stream failed — token may be invalid")
         return _chatgpt_addon_completion(model, messages, tools, tool_choice)
 
+    import time
+    t0 = time.time()
+    
     # Docker + chatgpt.com free: HA waits for ONE HTTP response, so no agentic
     # loop is possible. Pre-fetch HA context BEFORE the LLM call, inject as a
     # system message, then call once.
     messages = _prefetch_ha_context_if_needed(messages, tools, token)
+    t1 = time.time()
 
     # For pure status/listing queries, since we already injected the context
     # above, drop all tools. ChatGPT Free rejects payloads >45KB (413 Payload
@@ -300,7 +304,18 @@ def _try_free_with_token(
         gen = stream_text_chat_completion(backend, messages, model, tools, tool_choice)
         return _prefetch_stream(gen, "chatgpt.com backend stream failed — token may be invalid")
     request = ConversationRequest(model=model, messages=messages, tools=tools, tool_choice=tool_choice)
+    t2 = time.time()
     content = collect_text(backend, request)
+    t3 = time.time()
+    
+    if force_sync_for_vision:
+        logger.info({
+            "event": "vision_timing_profile",
+            "ha_prefetch_sec": round(t1 - t0, 2),
+            "chatgpt_upload_and_gen_sec": round(t3 - t2, 2),
+            "total_sec": round(t3 - t0, 2),
+            "model": model
+        })
     
     if "advanced data analysis right now" in content or "can’t do more advanced data analysis" in content:
         raise RuntimeError(f"quota exceeded (advanced data analysis): {content}")
