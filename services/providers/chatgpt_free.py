@@ -205,8 +205,7 @@ def handle_free_chat(
             try:
                 acc_info = account_service.get_account(token)
                 email = acc_info.get("email") or token[:20] if acc_info else token[:20]
-                
-                if exhausted_item == "file_upload":
+                if exhausted_item in ("file_upload", "advanced_data_analysis"):
                     account_service.mark_image_failed(token)
                 else:
                     account_service.demote_account(token)
