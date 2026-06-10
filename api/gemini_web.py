@@ -367,6 +367,139 @@ def _generate_text(client, prompt: str, files: list[str], model_enum) -> str:
     return str(getattr(resp, "text", "") or "")
 
 
+import json
+import re
+
+TOOL_WRAP_HINT = (
+    "\n\n### SYSTEM: TOOL CALLING PROTOCOL (MANDATORY) ###\n"
+    "If tool execution is required, you MUST adhere to this EXACT protocol. No exceptions.\n\n"
+    "1. OUTPUT RESTRICTION: Your response MUST contain ONLY the [ToolCalls] block. Conversational filler, preambles, or concluding remarks are STRICTLY PROHIBITED.\n"
+    "2. WRAPPING LOGIC: Every parameter value MUST be enclosed in a markdown code block. Use 3 backticks (```) by default. If the value contains backticks, the outer fence MUST be longer than any sequence inside (e.g., ````).\n"
+    "3. TAG SYMMETRY: All tags MUST be balanced and closed in the exact reverse order of opening. Incomplete or unclosed blocks are strictly prohibited.\n\n"
+    "REQUIRED SYNTAX:\n"
+    "[ToolCalls]\n"
+    "[Call:tool_name]\n"
+    "[CallParameter:parameter_name]\n"
+    "```\n"
+    "value\n"
+    "```\n"
+    "[/CallParameter]\n"
+    "[/Call]\n"
+    "[/ToolCalls]\n\n"
+    "CRITICAL: Do NOT mix natural language with protocol tags. Either respond naturally OR provide the protocol block alone. There is no middle ground."
+)
+
+def _build_tool_prompt(tools: list[dict[str, Any]]) -> str:
+    if not tools:
+        return ""
+    lines = [
+        "SYSTEM INTERFACE: You have access to the following technical tools. You MUST invoke them when necessary to fulfill the request, strictly adhering to the provided JSON schemas."
+    ]
+    for tool_obj in tools:
+        func = tool_obj.get("function", {})
+        desc = func.get("description", "No description provided.")
+        lines.append(f"Tool `{func.get('name')}`: {desc}")
+        if func.get("parameters"):
+            lines.extend(["Arguments JSON schema:", json.dumps(func.get("parameters"), ensure_ascii=False)])
+        else:
+            lines.append("Arguments JSON schema: {}")
+            
+    lines.append(TOOL_WRAP_HINT)
+    return "\n".join(lines)
+
+def _extract_tool_calls(text: str) -> tuple[str, list[dict[str, Any]]]:
+    tool_calls = []
+    call_re = re.compile(r"\[Call:([^]]+)\](.*?)\[/Call\]", re.DOTALL | re.IGNORECASE)
+    param_re = re.compile(r"\[CallParameter:([^]]+)\](.*?)\[/CallParameter\]", re.DOTALL | re.IGNORECASE)
+    
+    for match in call_re.finditer(text):
+        name = match.group(1).strip()
+        body = match.group(2)
+        args_dict = {}
+        
+        param_matches = list(param_re.finditer(body))
+        if param_matches:
+            for pmatch in param_matches:
+                pname = pmatch.group(1).strip()
+                pval = pmatch.group(2).strip()
+                pval = re.sub(r"^`{3,}.*?\n", "", pval)
+                pval = re.sub(r"\n`{3,}$", "", pval).strip()
+                try:
+                    args_dict[pname] = json.loads(pval)
+                except Exception:
+                    args_dict[pname] = pval
+        else:
+            clean_body = body.strip()
+            clean_body = re.sub(r"^`{3,}.*?\n", "", clean_body)
+            clean_body = re.sub(r"\n`{3,}$", "", clean_body).strip()
+            if clean_body.startswith("{"):
+                try:
+                    args_dict = json.loads(clean_body)
+                except Exception:
+                    pass
+                    
+        tool_calls.append({
+            "id": f"call_{uuid.uuid4().hex[:16]}",
+            "type": "function",
+            "function": {
+                "name": name,
+                "arguments": json.dumps(args_dict, ensure_ascii=False)
+            }
+        })
+        
+    cleaned_text = re.sub(r"\[ToolCalls\].*?\[/ToolCalls\]", "", text, flags=re.DOTALL | re.IGNORECASE).strip()
+    return cleaned_text, tool_calls
+
+def _flatten_messages_with_tools(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None) -> str:
+    parts = []
+    
+    if tools:
+        sys_prompt = _build_tool_prompt(tools)
+        parts.append(f"System: {sys_prompt}")
+        
+    for msg in messages or []:
+        role = str(msg.get("role") or "user")
+        content = msg.get("content", "")
+        
+        text = ""
+        if isinstance(content, list):
+            text = " ".join(str(p.get("text", "")) for p in content if isinstance(p, dict) and p.get("type") == "text")
+        else:
+            text = str(content or "")
+            
+        if role == "tool":
+            tool_name = msg.get("name", "unknown")
+            text = f"[ToolResults]\n[Result:{tool_name}]\n[ToolResult]\n{text}\n[/ToolResult]\n[/Result]\n[/ToolResults]"
+            
+        tool_calls = msg.get("tool_calls", [])
+        if role == "assistant" and tool_calls:
+            calls_text = []
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                args = func.get("arguments", "{}")
+                try:
+                    args_dict = json.loads(args)
+                    formatted_params = ""
+                    for k, v in args_dict.items():
+                        v_str = json.dumps(v, ensure_ascii=False) if not isinstance(v, str) else str(v)
+                        formatted_params += f"[CallParameter:{k}]\n```\n{v_str}\n```\n[/CallParameter]\n"
+                    calls_text.append(f"[Call:{func.get('name')}]\n{formatted_params}[/Call]")
+                except Exception:
+                    calls_text.append(f"[Call:{func.get('name')}]\n```\n{args}\n```\n[/Call]")
+                    
+            if calls_text:
+                text += ("\n" if text else "") + "[ToolCalls]\n" + "\n".join(calls_text) + "\n[/ToolCalls]"
+                
+        if not text.strip():
+            continue
+            
+        label = {"system": "System", "assistant": "Assistant", "user": "User", "tool": "Tool"}.get(role, role.capitalize())
+        parts.append(f"{label}: {text}")
+        
+    parts.append("Assistant:")
+    return "\n\n".join(parts)
+
+
 def handle_gemini_web_api_chat(
     model: str,
     messages: list[dict[str, Any]],
@@ -374,10 +507,11 @@ def handle_gemini_web_api_chat(
     body: dict[str, Any] | None = None,
 ) -> dict[str, Any] | Iterator[dict[str, Any]]:
     """Provider handler cho router chính (gma/* models)."""
-    from api.claude import _flatten_messages  # cùng pattern stateless prompt
     from services.account_service import account_service
 
-    prompt = _flatten_messages(messages)
+    # Lấy tools từ request body
+    tools = body.get("tools") if body else None
+    prompt = _flatten_messages_with_tools(messages, tools)
     files = _prepare_files(messages)
     model_enum = _resolve_model(model)
     if files:
@@ -442,20 +576,34 @@ def handle_gemini_web_api_chat(
         def sse() -> Iterator[dict[str, Any]]:
             try:
                 text = _call_with_retry()
+                clean_text, tool_calls = _extract_tool_calls(text)
+                
                 yield _openai_chunk(model, cid, created, {"role": "assistant", "content": ""})
-                yield _openai_chunk(model, cid, created, {"content": text})
-                yield _openai_chunk(model, cid, created, {}, finish="stop")
+                if tool_calls:
+                    yield _openai_chunk(model, cid, created, {"tool_calls": tool_calls}, finish="tool_calls")
+                else:
+                    if clean_text:
+                        yield _openai_chunk(model, cid, created, {"content": clean_text})
+                    yield _openai_chunk(model, cid, created, {}, finish="stop")
             finally:
                 _cleanup(files)
         return sse()
 
     try:
         text = _call_with_retry()
+        clean_text, tool_calls = _extract_tool_calls(text)
     finally:
         _cleanup(files)
+        
+    msg: dict[str, Any] = {"role": "assistant"}
+    if tool_calls:
+        msg["tool_calls"] = tool_calls
+    else:
+        msg["content"] = clean_text
+        
     return {
         "id": cid, "object": "chat.completion", "created": created, "model": model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": text},
-                     "finish_reason": "stop"}],
+        "choices": [{"index": 0, "message": msg,
+                     "finish_reason": "tool_calls" if tool_calls else "stop"}],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
