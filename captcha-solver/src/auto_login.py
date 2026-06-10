@@ -656,7 +656,29 @@ async def do_google_login_steps(
         await asyncio.sleep(0.6)
         await pwd_input.fill(password)
         await asyncio.sleep(0.6)
-        await _safe_click(page, '#passwordNext button', 'span[jsname="V67aGc"]', 'button[jsname="LgbsSe"]:visible')
+        clicked = await _safe_click(
+            page, 
+            '#passwordNext button', 
+            '#passwordNext',
+            'button:has-text("Next")',
+            'button:has-text("Tiếp theo")',
+            'span[jsname="V67aGc"]', 
+            'button[jsname="LgbsSe"]:visible',
+            'div[role="button"]:has-text("Next")',
+            'div[role="button"]:has-text("Tiếp theo")'
+        )
+        if not clicked:
+            await page.evaluate("""() => {
+                const all = document.querySelectorAll('button, div[role="button"], span[role="button"]');
+                for (const el of all) {
+                    if (!el.offsetParent) continue;
+                    const t = (el.innerText || '').trim().toLowerCase();
+                    if (t === 'next' || t === 'tiếp theo' || t === 'tiep theo') {
+                        el.click();
+                        return;
+                    }
+                }
+            }""")
     except Exception as exc:
         session.state = "failed"
         session.error = f"Không điền được mật khẩu: {exc}"
