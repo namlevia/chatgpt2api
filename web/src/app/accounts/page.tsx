@@ -401,12 +401,16 @@ function AccountsPageContent() {
         });
       }
 
-      // ── Gemini Web / ChatGPT Web profile branches ──
-      // Both live in `providers.{gemini_web,chatgpt_web}.profile` rather
+      // ── Gemini Web / ChatGPT Web / Gemini Web API profile branches ──
+      // Both live in `providers.{gemini_web,chatgpt_web,gemini_web_api}.profile` rather
       // than accounts.json, so they only reach the UI via /provider-tree.
       const gwBranch = ptBranches.find((b: any) => b.type === "gemini_web");
       if (gwBranch) {
         tree.push(gwBranch);
+      }
+      const gwaBranch = ptBranches.find((b: any) => b.type === "gemini_web_api");
+      if (gwaBranch) {
+        tree.push(gwaBranch);
       }
       const cgwBranch = ptBranches.find((b: any) => b.type === "chatgpt_web");
       if (cgwBranch) {
