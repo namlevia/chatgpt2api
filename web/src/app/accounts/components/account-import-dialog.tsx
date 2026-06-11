@@ -645,7 +645,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               password: multiDraft.password,
               prefer_method: preferMethod,
               totp_secret: multiTotpSecret,
-              services: ["gemini_web", "flow", "chatgpt"],
+              services: ["gemini_web", "flow", "chatgpt", "claude"],
             }),
           });
           if (!res.ok) throw new Error(`multi-onboard HTTP ${res.status}`);
@@ -687,6 +687,7 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
             if (results.gemini_web?.state === "success") ensureProfile("gemini_web");
             if (results.flow?.state === "success") ensureProfile("flow");
             if (results.chatgpt?.state === "success") ensureProfile("chatgpt_web");
+            if (results.claude?.state === "success" || results.claude_web?.state === "success") ensureProfile("claude");
             await request.post("/api/settings", { providers });
           } catch (e) {
             console.error("merge providers config failed", e);
