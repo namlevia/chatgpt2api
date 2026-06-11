@@ -45,6 +45,50 @@ def _is_placeholder_profile(profile: str) -> bool:
     return bool(re.search(r"(^|[-_])default$", str(profile or "").strip(), re.IGNORECASE))
 
 
+_WEB_PROVIDER_KEYS = ("claude", "gemini_web", "gemini_web_api", "chatgpt_web", "flow")
+
+
+def _strip_web_profiles_from_config(profiles: set[str]) -> None:
+    """Remove the given profile names from every web provider's accounts[] /
+    profiles[] / legacy `profile` field.
+
+    A web-session account is dual-sourced: the account_service pool AND
+    providers.<web>.accounts[]. Deleting only the pool entry leaves the config
+    entry, which the provider-tree re-injects, so the account reappears (this is
+    the "chatgpt-default keeps coming back" / "Claude won't delete" bug). Wiping
+    the config entry makes the delete stick. The on-disk captcha-solver browser
+    profile (a shared Google session) is intentionally left untouched — that is
+    a separate, explicit action."""
+    if not profiles:
+        return
+    from services.config import config
+    providers = config.data.get("providers")
+    if not isinstance(providers, dict):
+        return
+    changed = False
+    for key in _WEB_PROVIDER_KEYS:
+        cfg = providers.get(key)
+        if not isinstance(cfg, dict):
+            continue
+        accs = cfg.get("accounts")
+        if isinstance(accs, list):
+            kept = [a for a in accs if not (isinstance(a, dict) and str(a.get("profile") or "").strip() in profiles)]
+            if len(kept) != len(accs):
+                cfg["accounts"] = kept
+                changed = True
+        profs = cfg.get("profiles")
+        if isinstance(profs, list):
+            kept_p = [p for p in profs if str(p or "").strip() not in profiles]
+            if len(kept_p) != len(profs):
+                cfg["profiles"] = kept_p
+                changed = True
+        if str(cfg.get("profile") or "").strip() in profiles:
+            cfg["profile"] = ""
+            changed = True
+    if changed:
+        config._save()
+
+
 def _cleanup_captcha_profiles(accounts: list[dict]) -> None:
     """Best-effort: delete each account's captcha-solver browser profile when
     the account is removed, so the on-disk profile doesn't linger (orphan).
@@ -617,7 +661,15 @@ def create_router() -> APIRouter:
         # and the saved-credential vault is a separate store. Wiping a profile or
         # a saved credential is its own explicit action, never a delete side
         # effect. (_cleanup_captcha_profiles kept for a future explicit endpoint.)
-        return account_service.delete_accounts(tokens)
+        result = account_service.delete_accounts(tokens)
+        # Web-session accounts also live in providers.<web>.accounts[]; strip
+        # them there too so the delete sticks (otherwise the provider-tree
+        # re-injects them from config). Browser profile on disk is left intact.
+        try:
+            _strip_web_profiles_from_config(set(tokens))
+        except Exception:
+            pass
+        return result
 
     @router.post("/api/accounts/refresh")
     async def refresh_accounts(body: AccountRefreshRequest, authorization: str | None = Header(default=None)):

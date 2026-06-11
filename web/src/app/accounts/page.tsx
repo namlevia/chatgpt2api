@@ -3,6 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps } from "react";
 import {
+  ArrowUp,
+  ArrowDown,
   Ban,
   Bot,
   CheckCircle2,
@@ -53,6 +55,8 @@ import {
   fetchAccounts,
   refreshAccounts,
   updateAccount,
+  promoteAccount,
+  demoteAccount,
   type Account,
   type AccountStatus,
 } from "@/lib/api";
@@ -640,6 +644,33 @@ function AccountsPageContent() {
     }
   };
 
+  // Move a web-session account to #1 / to the back of its rotation pool.
+  const handleReorderAccount = async (token: string, dir: "promote" | "demote") => {
+    if (!token) return;
+    try {
+      await (dir === "promote" ? promoteAccount([token]) : demoteAccount([token]));
+      await loadAccounts(true);
+      await fetchProviderTree();
+      toast.success(dir === "promote" ? "Đã đặt làm #1" : "Đã chuyển xuống cuối");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Đổi thứ tự thất bại");
+    }
+  };
+
+  // Set the status of a web-session account (active / disabled). The profile is
+  // its access_token; if it isn't pooled yet the update 404s harmlessly.
+  const handleSetWebStatus = async (token: string, status: AccountStatus) => {
+    if (!token) return;
+    try {
+      const data = await updateAccount(token, { status });
+      setAccounts(data.items);
+      await fetchProviderTree();
+      toast.success(status === "disabled" ? "Đã vô hiệu hóa" : "Đã cập nhật trạng thái");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Cập nhật trạng thái thất bại");
+    }
+  };
+
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.access_token)])));
@@ -678,6 +709,34 @@ function AccountsPageContent() {
             <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
               <span>Dùng lần cuối</span>
               <span className="font-medium text-slate-600">{formatRelativeTime(inst.last_used_at, lang)}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => void handleReorderAccount(token, "promote")}
+                disabled={inst.is_primary}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-emerald-300 hover:text-emerald-600 disabled:opacity-40"
+                title="Đưa lên đầu hàng đợi (ưu tiên dùng trước)"
+              >
+                <ArrowUp className="size-3" /> Đặt #1
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleReorderAccount(token, "demote")}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-slate-400 hover:text-slate-700"
+                title="Chuyển xuống cuối hàng đợi"
+              >
+                <ArrowDown className="size-3" /> Xuống cuối
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleSetWebStatus(token, clStatus === "disabled" ? "active" : "disabled")}
+                className="inline-flex items-center gap-1 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-[11px] font-medium text-slate-600 transition-colors hover:border-amber-300 hover:text-amber-600"
+                title={clStatus === "disabled" ? "Kích hoạt lại" : "Tạm vô hiệu hóa"}
+              >
+                {clStatus === "disabled" ? <Power className="size-3" /> : <PowerOff className="size-3" />}
+                {clStatus === "disabled" ? "Kích hoạt" : "Vô hiệu hóa"}
+              </button>
             </div>
           </div>
           <div className="rounded-[12px] p-4 card-3d card-tint-sky space-y-2">
@@ -1426,6 +1485,16 @@ function AccountsPageContent() {
                             className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 cursor-pointer transition-colors"
                             onClick={() => setExpandedId(expandedId === (inst.access_token || inst.profile) ? null : (inst.access_token || inst.profile))}
                           >
+                            <Checkbox
+                              className="size-4 shrink-0"
+                              checked={selectedIds.includes(inst.access_token || inst.profile)}
+                              onClick={(e) => e.stopPropagation()}
+                              onCheckedChange={(checked) => {
+                                const id = inst.access_token || inst.profile;
+                                if (checked) setSelectedIds((prev) => [...prev, id]);
+                                else setSelectedIds((prev) => prev.filter((x) => x !== id));
+                              }}
+                            />
                             <span
                               className={cn(
                                 "shrink-0 inline-flex items-center justify-center min-w-[28px] h-5 px-1.5 rounded-md text-[11px] font-mono font-bold tabular-nums",
@@ -1543,6 +1612,15 @@ function AccountsPageContent() {
                                 className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 cursor-pointer transition-colors"
                                 onClick={() => setExpandedId(expandedId === inst.access_token ? null : inst.access_token)}
                               >
+                                <Checkbox
+                                  className="size-4 shrink-0"
+                                  checked={selectedIds.includes(inst.access_token)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  onCheckedChange={(checked) => {
+                                    if (checked) setSelectedIds((prev) => [...prev, inst.access_token]);
+                                    else setSelectedIds((prev) => prev.filter((x) => x !== inst.access_token));
+                                  }}
+                                />
                                 {/* Ordinal badge */}
                                 <span
                                   className={cn(

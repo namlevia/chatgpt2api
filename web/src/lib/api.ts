@@ -285,6 +285,20 @@ export async function refreshAccounts(accessTokens: string[]) {
   });
 }
 
+export async function promoteAccount(accessTokens: string[]) {
+  return httpRequest<{ items?: unknown[] }>("/api/accounts/promote", {
+    method: "POST",
+    body: { access_tokens: accessTokens },
+  });
+}
+
+export async function demoteAccount(accessTokens: string[]) {
+  return httpRequest<{ items?: unknown[] }>("/api/accounts/demote", {
+    method: "POST",
+    body: { access_tokens: accessTokens },
+  });
+}
+
 export async function updateAccount(
   accessToken: string,
   updates: {
