@@ -310,6 +310,9 @@ function AccountsPageContent() {
   const [editingAccount, setEditingAccount] = useState<Account | null>(null);
   const [editStatus, setEditStatus] = useState<AccountStatus>("active");
   const [editType, setEditType] = useState<string>("");
+  // Per-account notes editor (web-session rows: key = access_token / profile)
+  const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
+  const [savingNotes, setSavingNotes] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -621,6 +624,22 @@ function AccountsPageContent() {
     }
   };
 
+  const handleSaveNotes = async (token: string) => {
+    if (!token) return;
+    const value = notesDraft[token] ?? "";
+    setSavingNotes(token);
+    try {
+      const data = await updateAccount(token, { notes: value });
+      setAccounts(data.items);
+      await fetchProviderTree();
+      toast.success("Đã lưu ghi chú");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Lưu ghi chú thất bại");
+    } finally {
+      setSavingNotes(null);
+    }
+  };
+
   const toggleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedIds((prev) => Array.from(new Set([...prev, ...currentRows.map((item) => item.access_token)])));
@@ -629,11 +648,69 @@ function AccountsPageContent() {
     setSelectedIds((prev) => prev.filter((id) => !currentRows.some((row) => row.access_token === id)));
   };
 
+  // Expandable detail panel for a web-session row (Claude / Gemini Web API),
+  // mirroring the ChatGPT account detail: status + request stats + last-used +
+  // an editable notes field. `inst.access_token` is the captcha-solver profile.
+  const renderWebAccountDetail = (inst: any) => {
+    const token = String(inst.access_token || "");
+    const noteValue = notesDraft[token] ?? inst.notes ?? "";
+    const clStatus = String(inst.status || "active");
+    const dot =
+      clStatus === "active" ? "bg-emerald-400" :
+      clStatus === "error" ? "bg-rose-400" :
+      clStatus === "disabled" ? "bg-slate-300" : "bg-amber-400";
+    return (
+      <div className="pl-12 pr-5 pb-3 bg-slate-50/50 border-t border-slate-100">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-3">
+          <div className="rounded-[12px] p-4 card-3d card-tint-emerald space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <p className="text-[13px] font-bold text-slate-800 truncate">{inst.label || inst.email || inst.profile}</p>
+              <Badge variant="secondary" className="inline-flex items-center gap-1 rounded text-[10px] px-1 py-0">
+                <span className={cn("size-1.5 rounded-full", dot)} />
+                {translateStatus(clStatus, lang)}
+              </Badge>
+            </div>
+            {inst.profile ? <code className="block text-[10px] text-slate-400 truncate">profile: {inst.profile}</code> : null}
+            <div className="flex items-center gap-4 text-[11px]">
+              <span className="text-emerald-600">{inst.success ?? 0} thành công</span>
+              <span className="text-rose-400">{inst.fail ?? 0} thất bại</span>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-100">
+              <span>Dùng lần cuối</span>
+              <span className="font-medium text-slate-600">{formatRelativeTime(inst.last_used_at, lang)}</span>
+            </div>
+          </div>
+          <div className="rounded-[12px] p-4 card-3d card-tint-sky space-y-2">
+            <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-400">Ghi chú</label>
+            <textarea
+              value={noteValue}
+              onChange={(e) => setNotesDraft((prev) => ({ ...prev, [token]: e.target.value }))}
+              placeholder="Thêm ghi chú cho tài khoản này…"
+              rows={3}
+              className="w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-[12px] text-slate-700 placeholder:text-slate-400 focus:border-slate-400 focus:outline-none"
+            />
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => void handleSaveNotes(token)}
+                disabled={savingNotes === token || noteValue === (inst.notes ?? "")}
+                className="inline-flex items-center gap-1 rounded-lg bg-slate-900 px-3 py-1.5 text-[11px] font-medium text-white transition-colors hover:bg-slate-800 disabled:opacity-40"
+              >
+                {savingNotes === token ? <LoaderCircle className="size-3 animate-spin" /> : null}
+                Lưu ghi chú
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // Edit/toggle/delete a profile-style account row (flow, gemini_web,
   // chatgpt_web). Mirrors the ChatGPT pool's per-row actions: each row
   // can be removed entirely or flipped enabled/disabled in the rotation.
   const mutateProviderAccounts = async (
-    providerKey: "flow" | "gemini_web" | "chatgpt_web" | "claude",
+    providerKey: "flow" | "gemini_web" | "gemini_web_api" | "chatgpt_web" | "claude",
     profile: string,
     op: "delete" | "toggle",
   ) => {
@@ -1345,7 +1422,10 @@ function AccountsPageContent() {
 
                         return (
                         <div key={`${providerKey}:${inst.profile}`}>
-                          <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 transition-colors">
+                          <div
+                            className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 cursor-pointer transition-colors"
+                            onClick={() => setExpandedId(expandedId === (inst.access_token || inst.profile) ? null : (inst.access_token || inst.profile))}
+                          >
                             <span
                               className={cn(
                                 "shrink-0 inline-flex items-center justify-center min-w-[28px] h-5 px-1.5 rounded-md text-[11px] font-mono font-bold tabular-nums",
@@ -1389,14 +1469,16 @@ function AccountsPageContent() {
                                     {isFlowConfigured ? translateStatus(wbStatus, lang) : "disabled"}
                                   </span>
                                 </div>
-                                {(wbExhausted.length > 0 || true) && (
-                                  <div className="flex flex-wrap items-center gap-2">
-                                    <code className="text-[10px] text-slate-400">profile: {inst.profile}</code>
+                                {(wbExhausted.length > 0 || inst.notes) && (
+                                  <div className="flex flex-wrap items-center gap-1.5">
                                     {wbExhausted.map(f => (
                                       <Badge key={`wb-ex-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-rose-50 text-rose-500 border border-rose-100 font-medium">
                                         Hết {f}
                                       </Badge>
                                     ))}
+                                    {inst.notes ? (
+                                      <span className="text-[10px] italic text-slate-400 truncate max-w-[200px]" title={inst.notes}>{inst.notes}</span>
+                                    ) : null}
                                   </div>
                                 )}
                               </div>
@@ -1422,6 +1504,7 @@ function AccountsPageContent() {
                               </button>
                             </div>
                           </div>
+                          {expandedId === (inst.access_token || inst.profile) && renderWebAccountDetail(inst)}
                         </div>
                         );
                       })}
@@ -1456,7 +1539,10 @@ function AccountsPageContent() {
 
                             return (
                             <div key={`claude:${inst.access_token || inst.ordinal}`}>
-                              <div className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 transition-colors">
+                              <div
+                                className="flex items-center gap-3 px-5 py-3 hover:bg-slate-50/60 cursor-pointer transition-colors"
+                                onClick={() => setExpandedId(expandedId === inst.access_token ? null : inst.access_token)}
+                              >
                                 {/* Ordinal badge */}
                                 <span
                                   className={cn(
@@ -1497,13 +1583,16 @@ function AccountsPageContent() {
                                         {translateStatus(clStatus, lang)}
                                       </span>
                                     </div>
-                                    {clExhausted.length > 0 && (
-                                      <div className="flex flex-wrap items-center gap-1">
+                                    {(clExhausted.length > 0 || inst.notes) && (
+                                      <div className="flex flex-wrap items-center gap-1.5">
                                         {clExhausted.map(f => (
                                           <Badge key={`cl-ex-${f}`} variant="secondary" className="rounded text-[9px] px-1 py-0 bg-rose-50 text-rose-500 border border-rose-100 font-medium">
                                             Hết {f}
                                           </Badge>
                                         ))}
+                                        {inst.notes ? (
+                                          <span className="text-[10px] italic text-slate-400 truncate max-w-[200px]" title={inst.notes}>{inst.notes}</span>
+                                        ) : null}
                                       </div>
                                     )}
                                   </div>
@@ -1524,6 +1613,7 @@ function AccountsPageContent() {
                                   </button>
                                 </div>
                               </div>
+                              {expandedId === inst.access_token && renderWebAccountDetail(inst)}
                             </div>
                             );
                           })

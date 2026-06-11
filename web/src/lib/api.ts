@@ -291,6 +291,7 @@ export async function updateAccount(
     type?: AccountType;
     status?: AccountStatus;
     quota?: number;
+    notes?: string;
   },
 ) {
   return httpRequest<AccountUpdateResponse>("/api/accounts/update", {
