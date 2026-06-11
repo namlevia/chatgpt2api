@@ -35,6 +35,13 @@ GROUP_CODEX = "codex"
 GROUP_OPENAI = "openai"
 GROUP_ANTIGRAVITY = "antigravity"
 GROUP_CLAUDE = "claude"
+# Captcha-solver web-session pools (profile name = access_token). Each is a
+# separate pool so a quota-exhausted gemini_web_api profile never gets picked
+# as a free chatgpt account by get_text_access_token().
+GROUP_GEMINI_WEB_API = "gemini_web_api"
+GROUP_GEMINI_WEB = "gemini_web"
+GROUP_CHATGPT_WEB = "chatgpt_web"
+WEB_SESSION_GROUPS = (GROUP_CLAUDE, GROUP_GEMINI_WEB_API, GROUP_GEMINI_WEB, GROUP_CHATGPT_WEB)
 
 
 def account_group(account: dict | None) -> str:
@@ -65,6 +72,15 @@ def account_group(account: dict | None) -> str:
     # Claude.ai web session (sessionKey) — completely separate pool.
     if "claude" in types:
         return GROUP_CLAUDE
+    # Other captcha-solver web-session pools (gemini.google.com via cookie or
+    # DOM scrape, chatgpt.com web). Each keeps its own pool so rotation +
+    # quota-failure tracking stay isolated, exactly like Claude.
+    if GROUP_GEMINI_WEB_API in types:
+        return GROUP_GEMINI_WEB_API
+    if GROUP_GEMINI_WEB in types:
+        return GROUP_GEMINI_WEB
+    if GROUP_CHATGPT_WEB in types:
+        return GROUP_CHATGPT_WEB
     # Explicit Codex-token tag wins outright.
     if "codex" in types:
         return GROUP_CODEX
@@ -325,6 +341,14 @@ class AccountService:
                 group = account_group(account)
                 if group == GROUP_ANTIGRAVITY:
                     continue
+                # Web-session pools (claude / gemini_web_api / gemini_web /
+                # chatgpt_web) store a captcha-solver PROFILE NAME as the
+                # access_token — never a usable chatgpt JWT. They have their own
+                # selectors (get_claude_session_key / normalize_and_rank_accounts)
+                # so they must never be handed to the chatgpt token path, even
+                # when account_type is None ("any").
+                if group in WEB_SESSION_GROUPS:
+                    continue
                 # Type-filter via the canonical group classifier. "free" now
                 # means group==free (excludes codex tokens AND paid-plan
                 # accounts — plus/go/business carry Codex and must never leak
@@ -411,6 +435,83 @@ class AccountService:
                             pass
                 return token
             return ""
+
+    def normalize_and_rank_accounts(
+        self,
+        raw_accounts: list[dict],
+        account_type: str,
+        required_features: list[str] | None = None,
+    ) -> list[dict]:
+        """Sync captcha-solver profiles into the pool and rank them for rotation.
+
+        Used by web-session providers (gemini_web_api, gemini_web, chatgpt_web)
+        whose "access_token" is a profile name. Mirrors get_claude_session_key
+        but returns the FULL ranked list (the caller iterates with retry/exclude):
+
+          - Auto-registers any profile not yet in the pool (type=account_type)
+            so it gets the right group, survives restarts, and shows in the UI.
+          - Drops disabled / error / limited accounts.
+          - When required_features needs images, drops profiles that recently
+            failed image upload / advanced data analysis (within 6 hours).
+          - Returns survivors in pool FIFO order (demoted accounts sink to the
+            back), so element #0 is the preferred account — same rotation as
+            ChatGPT / Claude.
+        """
+        required = set(required_features or [])
+        wants_image = bool(required & {"file_upload", "image_gen", "vision"})
+        profiles: list[str] = []
+        for a in raw_accounts or []:
+            p = str((a or {}).get("profile") or "").strip()
+            if p and p not in profiles:
+                profiles.append(p)
+        if not profiles:
+            return []
+
+        now = datetime.now()
+
+        def _recently_failed(acc: dict) -> bool:
+            for fld in ("last_image_failed_at", "last_analysis_failed_at"):
+                ts = acc.get(fld)
+                if not ts:
+                    continue
+                try:
+                    if (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() < 6 * 3600:
+                        return True
+                except Exception:
+                    pass
+            return False
+
+        wanted = set(profiles)
+        ranked: list[dict] = []
+        with self._lock:
+            changed = False
+            for p in profiles:
+                if p not in self._accounts:
+                    seed = self._normalize_account({
+                        "access_token": p,
+                        "type": account_type,
+                        "email": p,
+                        "status": "active",
+                        "quota": 0,
+                        "image_quota_unknown": True,
+                    })
+                    if seed:
+                        self._accounts[p] = seed
+                        changed = True
+            # Pool dict order is the FIFO priority queue (demote sinks to tail).
+            for token, account in self._accounts.items():
+                if token not in wanted:
+                    continue
+                if account_group(account) != account_type:
+                    continue
+                if account.get("status") in {"disabled", "error", "limited"}:
+                    continue
+                if wants_image and _recently_failed(account):
+                    continue
+                ranked.append({"profile": token, "status": account.get("status") or "active"})
+            if changed:
+                self._save_accounts()
+        return ranked
 
     def mark_image_failed(self, access_token: str) -> None:
         """Mark that this account failed an image upload (e.g. reached file limit)
