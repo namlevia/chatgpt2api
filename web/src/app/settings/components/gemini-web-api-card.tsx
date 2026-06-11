@@ -159,10 +159,16 @@ export function GeminiWebApiCard() {
           const cur = await request.get("/api/settings");
           const config = (cur.data as any)?.config || {};
           config.providers = config.providers || {};
+          const gwa = config.providers.gemini_web_api || {};
+          // Accumulate into profiles[] so reusing several Google accounts all
+          // stick (the old single `profile` field overwrote the previous one).
+          const profiles: string[] = Array.isArray(gwa.profiles) ? gwa.profiles.slice() : [];
+          if (!profiles.includes(prof)) profiles.push(prof);
           config.providers.gemini_web_api = {
-            ...(config.providers.gemini_web_api || {}),
+            ...gwa,
             enabled: true,
             profile: prof,
+            profiles,
           };
           await request.post("/api/settings", config);
           toast.success(`Gemini Web API dùng profile ${prof} ✓`);

@@ -330,10 +330,13 @@ def create_router() -> APIRouter:
             })
 
         def _collect_web_accounts(cfg: dict, provider_type: str) -> list[dict]:
-            """Build a Flow-style instances list from either the legacy
-            single-`profile` field or the new `accounts: [{profile,label,plan}]`
-            array. Both shapes are accepted so existing deployments don't
-            break when the config gets migrated.
+            """Build a Flow-style instances list from any of the three config
+            shapes a web provider may use, so an onboarded/reused profile always
+            shows regardless of which flow wrote it:
+              - `accounts: [{profile,label,plan}]`  (account-import dialog)
+              - `profiles: [profile, ...]`          (reuse picker / gemini_web_api)
+              - legacy single `profile`             (Settings card reuseOnboard)
+            All three are merged and de-duplicated by profile name.
 
             It also enriches the profiles with status and quota exhaustion stats
             from the account_service pool (which persist via record_profile_quota_failure).
@@ -348,6 +351,12 @@ def create_router() -> APIRouter:
                         "label": str(a.get("label") or a.get("profile") or ""),
                         "plan": str(a.get("plan") or "") or None,
                     })
+            # `profiles: [name, ...]` — string array shape (gemini_web_api, reuse picker)
+            profiles_field = cfg.get("profiles") if isinstance(cfg.get("profiles"), list) else []
+            for p in profiles_field:
+                name = str(p or "").strip()
+                if name and not _is_placeholder_profile(name) and not any(x["profile"] == name for x in ordered):
+                    ordered.append({"profile": name, "label": name, "plan": None})
             legacy = str(cfg.get("profile") or "").strip()
             if legacy and not _is_placeholder_profile(legacy) and not any(x["profile"] == legacy for x in ordered):
                 ordered.insert(0, {"profile": legacy, "label": legacy, "plan": None})
