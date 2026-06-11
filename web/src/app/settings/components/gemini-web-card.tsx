@@ -109,6 +109,29 @@ export function GeminiWebCard() {
     }
   }
 
+  async function persistGeminiWebConfig(prof: string) {
+    try {
+      const cur = await request.get("/api/settings");
+      const config = (cur.data as any)?.config || {};
+      config.providers = config.providers || {};
+      const geminiWeb = config.providers.gemini_web || {};
+      const accounts = Array.isArray(geminiWeb.accounts) ? [...geminiWeb.accounts] : [];
+      if (!accounts.some((a: any) => a.profile === prof)) {
+        accounts.push({ profile: prof, label: prof });
+      }
+      config.providers.gemini_web = {
+        ...geminiWeb,
+        enabled: true,
+        profile: prof, // Keep legacy field for fallback
+        accounts,
+      };
+      await request.post("/api/settings", config);
+      toast.success(`Đã lưu config Gemini Web (${prof}) ✓`);
+    } catch (e: any) {
+      toast.error(`Lưu config fail: ${e?.message || e}`);
+    }
+  }
+
   function stopPolling() {
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
@@ -128,7 +151,10 @@ export function GeminiWebCard() {
       if (data.state === "success" || data.state === "failed") {
         stopPolling();
         setRunning(false);
-        if (data.state === "success") toast.success(`Gemini Web profile sẵn sàng ✓`);
+        if (data.state === "success") {
+          toast.success(`Gemini Web profile sẵn sàng ✓`);
+          void persistGeminiWebConfig(profile);
+        }
         else toast.error(`Onboard fail: ${data.error || data.message}`);
       }
     } catch {
@@ -155,26 +181,7 @@ export function GeminiWebCard() {
       setSession(initial);
       toast.info(`Đang tái dùng ${prof} cho Gemini Web…`);
       const handleSuccess = async (data: OnboardState) => {
-        try {
-          const cur = await request.get("/api/settings");
-          const config = (cur.data as any)?.config || {};
-          config.providers = config.providers || {};
-          const geminiWeb = config.providers.gemini_web || {};
-          const accounts = Array.isArray(geminiWeb.accounts) ? [...geminiWeb.accounts] : [];
-          if (!accounts.some((a: any) => a.profile === prof)) {
-            accounts.push({ profile: prof, label: prof });
-          }
-          config.providers.gemini_web = {
-            ...geminiWeb,
-            enabled: true,
-            profile: prof, // Keep legacy field for fallback
-            accounts,
-          };
-          await request.post("/api/settings", config);
-          toast.success(`Gemini Web dùng profile ${prof} ✓`);
-        } catch (e: any) {
-          toast.error(`Lưu config fail: ${e?.message || e}`);
-        }
+        await persistGeminiWebConfig(prof);
       };
       
       if (initial.state === "success") {

@@ -109,6 +109,27 @@ export function GeminiWebApiCard() {
     }
   }
 
+  async function persistGeminiWebApiConfig(prof: string) {
+    try {
+      const cur = await request.get("/api/settings");
+      const config = (cur.data as any)?.config || {};
+      config.providers = config.providers || {};
+      const gwa = config.providers.gemini_web_api || {};
+      const profiles: string[] = Array.isArray(gwa.profiles) ? gwa.profiles.slice() : [];
+      if (!profiles.includes(prof)) profiles.push(prof);
+      config.providers.gemini_web_api = {
+        ...gwa,
+        enabled: true,
+        profile: prof,
+        profiles,
+      };
+      await request.post("/api/settings", config);
+      toast.success(`Đã lưu config Gemini Web API (${prof}) ✓`);
+    } catch (e: any) {
+      toast.error(`Lưu config fail: ${e?.message || e}`);
+    }
+  }
+
   function stopPolling() {
     if (pollRef.current) {
       window.clearInterval(pollRef.current);
@@ -128,7 +149,10 @@ export function GeminiWebApiCard() {
       if (data.state === "success" || data.state === "failed") {
         stopPolling();
         setRunning(false);
-        if (data.state === "success") toast.success(`Gemini Web API profile sẵn sàng ✓`);
+        if (data.state === "success") {
+          toast.success(`Gemini Web API profile sẵn sàng ✓`);
+          void persistGeminiWebApiConfig(profile);
+        }
         else toast.error(`Onboard fail: ${data.error || data.message}`);
       }
     } catch {
@@ -155,26 +179,7 @@ export function GeminiWebApiCard() {
       setSession(initial);
       toast.info(`Đang tái dùng ${prof} cho Gemini Web API…`);
       const handleSuccess = async (data: OnboardState) => {
-        try {
-          const cur = await request.get("/api/settings");
-          const config = (cur.data as any)?.config || {};
-          config.providers = config.providers || {};
-          const gwa = config.providers.gemini_web_api || {};
-          // Accumulate into profiles[] so reusing several Google accounts all
-          // stick (the old single `profile` field overwrote the previous one).
-          const profiles: string[] = Array.isArray(gwa.profiles) ? gwa.profiles.slice() : [];
-          if (!profiles.includes(prof)) profiles.push(prof);
-          config.providers.gemini_web_api = {
-            ...gwa,
-            enabled: true,
-            profile: prof,
-            profiles,
-          };
-          await request.post("/api/settings", config);
-          toast.success(`Gemini Web API dùng profile ${prof} ✓`);
-        } catch (e: any) {
-          toast.error(`Lưu config fail: ${e?.message || e}`);
-        }
+        await persistGeminiWebApiConfig(prof);
       };
       
       if (initial.state === "success") {
