@@ -90,6 +90,7 @@ class AccountUpdateRequest(BaseModel):
     type: str | None = None
     status: str | None = None
     quota: int | None = None
+    notes: str | None = None
 
 
 class CPAPoolCreateRequest(BaseModel):
@@ -318,6 +319,7 @@ def create_router() -> APIRouter:
                     "last_quota_exhausted_at": pool_data.get("last_quota_exhausted_at") or "",
                     "last_image_failed_at": pool_data.get("last_image_failed_at") or "",
                     "last_analysis_failed_at": pool_data.get("last_analysis_failed_at") or "",
+                    "notes": pool_data.get("notes") or "",
                 })
             return out
 
@@ -444,6 +446,7 @@ def create_router() -> APIRouter:
                 "last_quota_exhausted_at": last_quota_at,
                 "last_image_failed_at": last_img_fail,
                 "last_analysis_failed_at": last_ana_fail,
+                "notes": acc.get("notes") or "",
             })
         tree.append({
             "provider": "Claude Web",
@@ -621,7 +624,7 @@ def create_router() -> APIRouter:
         access_token = str(body.access_token or "").strip()
         if not access_token:
             raise HTTPException(status_code=400, detail={"error": "access_token is required"})
-        updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota}.items() if value is not None}
+        updates = {key: value for key, value in {"type": body.type, "status": body.status, "quota": body.quota, "notes": body.notes}.items() if value is not None}
         if not updates:
             raise HTTPException(status_code=400, detail={"error": "还没有检测到改动，请修改后再保存"})
         account = account_service.update_account(access_token, updates)

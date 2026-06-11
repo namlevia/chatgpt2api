@@ -255,6 +255,10 @@ class AccountService:
         normalized["success"] = int(normalized.get("success") or 0)
         normalized["fail"] = int(normalized.get("fail") or 0)
         normalized["last_used_at"] = normalized.get("last_used_at")
+        # Free-text user annotation, shown/edited in the Accounts UI. Applies to
+        # every account type (chatgpt/claude/gemini-web/...). Defaults to "" and
+        # is only changed when an update explicitly carries it.
+        normalized["notes"] = str(normalized.get("notes") or "")
         return normalized
 
     def list_tokens(self) -> list[str]:
