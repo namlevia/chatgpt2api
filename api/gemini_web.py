@@ -576,10 +576,19 @@ def handle_gemini_web_api_chat(
                     last_exc = exc
                     continue
                     
-                # Auth/Cookie invalidation
+                # Auth/Cookie invalidation — the captcha-solver session for this
+                # profile is dead (usually a transient expiry, like a free
+                # account's 401/403). Mark it "disabled" so ranking skips it and
+                # the UI shows it, but quota_watcher auto-resets it after 6h to
+                # retry once re-onboarded — same recovery path as ChatGPT free.
                 if any(k in err for k in ("auth", "cookie", "1psid", "401", "403")):
-                    _logger().warning({"event": "gma_auth_retry", "error": str(exc)[:120]})
+                    _logger().warning({"event": "gma_auth_retry", "profile": profile, "error": str(exc)[:120]})
                     _drop_client(psid)
+                    if profile and profile != "static-config":
+                        try:
+                            account_service.update_account(profile, {"status": "disabled"})
+                        except Exception:
+                            pass
                     last_exc = exc
                     continue
                     
@@ -689,13 +698,18 @@ def handle_gemini_web_api_image_gen(prompt: str, n: int = 1, response_format: st
                 continue
                 
             if any(k in err for k in ("auth", "cookie", "1psid", "401", "403")):
-                _logger().warning({"event": "gma_auth_retry", "error": str(exc)[:120]})
+                _logger().warning({"event": "gma_auth_retry", "profile": profile, "error": str(exc)[:120]})
                 _drop_client(psid)
+                if profile and profile != "static-config":
+                    try:
+                        account_service.update_account(profile, {"status": "disabled"})
+                    except Exception:
+                        pass
                 last_exc = exc
                 continue
-                
+
             raise exc
-            
+
     if last_exc:
         raise last_exc
     raise RuntimeError("No available accounts to fulfill image request")
