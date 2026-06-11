@@ -34,6 +34,17 @@ def _profile_for_email(email: str) -> str:
     return f"google-{safe}"
 
 
+def _is_placeholder_profile(profile: str) -> bool:
+    """True for the legacy single-`profile` config placeholders (chatgpt-default,
+    gemini-web-default, claude-web-default, ...). These are NOT real onboarded
+    Google accounts — they only exist because the Settings card defaults the
+    field. The provider-tree must not surface them, otherwise the user can never
+    "delete" chatgpt-default from the Accounts UI (it isn't in accounts[]).
+    Mirrors the web reuse-profile-picker filter /(^|[-_])default$/i."""
+    import re
+    return bool(re.search(r"(^|[-_])default$", str(profile or "").strip(), re.IGNORECASE))
+
+
 def _cleanup_captcha_profiles(accounts: list[dict]) -> None:
     """Best-effort: delete each account's captcha-solver browser profile when
     the account is removed, so the on-disk profile doesn't linger (orphan).
@@ -294,7 +305,7 @@ def create_router() -> APIRouter:
                         "plan": str(a.get("plan") or "") or None,
                     })
             legacy = str(cfg.get("profile") or "").strip()
-            if legacy and not any(x["profile"] == legacy for x in ordered):
+            if legacy and not _is_placeholder_profile(legacy) and not any(x["profile"] == legacy for x in ordered):
                 ordered.insert(0, {"profile": legacy, "label": legacy, "plan": None})
             
             # Lookup in account_service
@@ -415,7 +426,7 @@ def create_router() -> APIRouter:
                 if isinstance(p, str) and p and p not in c_profs:
                     c_profs.append(p)
         legacy_c = str(claude_cfg.get("profile") or "").strip()
-        if legacy_c and legacy_c not in c_profs:
+        if legacy_c and not _is_placeholder_profile(legacy_c) and legacy_c not in c_profs:
             c_profs.append(legacy_c)
             
         for p in c_profs:

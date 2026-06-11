@@ -684,7 +684,14 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
               }
               providers[key] = { ...cfg, enabled: true, accounts };
             };
-            if (results.gemini_web?.state === "success") ensureProfile("gemini_web");
+            if (results.gemini_web?.state === "success") {
+              ensureProfile("gemini_web");
+              // Gemini Web API (gma/) talks to gemini.google.com with the SAME
+              // Google session/cookies as the gemini_web DOM profile, so onboard
+              // it onto the same profile — otherwise providers.gemini_web_api
+              // stays empty and the account never shows up nor rotates.
+              ensureProfile("gemini_web_api");
+            }
             if (results.flow?.state === "success") ensureProfile("flow");
             if (results.chatgpt?.state === "success") ensureProfile("chatgpt_web");
             if (results.claude?.state === "success" || results.claude_web?.state === "success") ensureProfile("claude");
