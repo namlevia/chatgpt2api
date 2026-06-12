@@ -475,6 +475,68 @@ def _fold_diacritics(text: str) -> str:
     return "".join(c for c in nfkd if not unicodedata.combining(c))
 
 
+# Command/filler tokens that never identify a device or room — kept out of
+# keyword matching so "tắt", "bật", "cho", "anh" don't widen the match.
+_TARGET_STOPWORDS = {
+    "tat", "bat", "mo", "dong", "khoa", "dat", "chinh", "tang", "giam",
+    "cho", "tao", "anh", "em", "toi", "minh", "giup", "gium", "dum", "di",
+    "la", "khong", "kiem", "tra", "xem", "nao", "dang", "het", "luon",
+    "voi", "va", "ra", "vao", "len", "xuong", "giúp", "the", "ho",
+}
+
+
+def _targeted_states(states: list[dict], query: str) -> list[dict]:
+    """Pick the entities most relevant to the query by keyword overlap.
+
+    Scores each in-scope entity by how many query terms appear in its
+    friendly_name/entity_id, then keeps only the highest-scoring set. For a
+    control command ("tắt đèn ban công cho tao") this collapses to just the
+    balcony light; for a broad/ambiguous query it returns [] so the caller
+    falls back to the full registry.
+    """
+    terms = [t for t in _fold_diacritics(query).split()
+             if len(t) > 1 and t not in _TARGET_STOPWORDS]
+    if not terms:
+        return []
+    scored: list[tuple[int, dict]] = []
+    for s in states:
+        eid = s.get("entity_id", "")
+        domain = eid.split(".")[0] if "." in eid else ""
+        if domain not in _CONTEXT_DOMAINS:
+            continue
+        name = (s.get("attributes", {}) or {}).get("friendly_name", "")
+        hay = _fold_diacritics(f"{name} {eid}")
+        score = sum(1 for t in terms if t in hay)
+        if score > 0:
+            scored.append((score, s))
+    if not scored:
+        return []
+    max_score = max(sc for sc, _ in scored)
+    return [s for sc, s in scored if sc == max_score]
+
+
+def format_states_context_targeted(query: str, max_entities: int = 60) -> str:
+    """Like format_states_context but inject ONLY the entities matching the
+    query keywords. Falls back to the FULL registry when the match is empty
+    (couldn't pin it down) or too broad (likely a whole-house request) so a
+    device is never silently dropped. This cuts the ~50KB registry down to a
+    handful of lines for a single-device command — the dominant prompt bloat."""
+    full = format_states_context()
+    if not full:
+        return full
+    states = get_states(use_cache=True)
+    if not states:
+        return full
+    matched = _targeted_states(states, query)
+    if not matched or len(matched) > max_entities:
+        return full  # ambiguous / whole-house → keep full registry
+    ctx = _build_context(matched)
+    return ctx + (
+        "\n\n[Đã lọc theo yêu cầu hiện tại. Nếu cần thiết bị/phòng khác, "
+        "gọi ha_search_entities hoặc GetLiveContext.]"
+    )
+
+
 def is_ha_query(messages: list[dict[str, Any]]) -> bool:
     """Public wrapper for HA intent detection. Used by handle() to decide
     on the PRISTINE user message before search/other injections so that
@@ -508,7 +570,22 @@ def inject_ha_context(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if not _is_ha_query(messages):
         return messages
 
-    ctx = format_states_context()
+    # Use the last user message to inject only the relevant entities (a single
+    # device for a control command), instead of the whole ~50KB registry.
+    query = ""
+    for m in reversed(messages):
+        if m.get("role") == "user":
+            c = m.get("content")
+            if isinstance(c, str):
+                query = c
+            elif isinstance(c, list):
+                query = " ".join(
+                    str(p.get("text") or "") for p in c
+                    if isinstance(p, dict) and p.get("type") in ("text", "input_text")
+                )
+            break
+
+    ctx = format_states_context_targeted(query) if query.strip() else format_states_context()
     if not ctx:
         return messages
 

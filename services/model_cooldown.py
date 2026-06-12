@@ -115,6 +115,15 @@ class ModelCooldownManager:
         elif status_code == 404:
             cooldown = self.BACKOFF_404_COOLDOWN
             reason = "not_found"
+        elif status_code == 413:
+            # Payload Too Large is REQUEST-SIZE specific, not provider health —
+            # a later, smaller request to the same provider may well succeed.
+            # Never cool it, so a one-off oversized prompt doesn't demote the
+            # provider for everything that follows.
+            state.status = "active"
+            state.reason = "payload_too_large"
+            state.last_error = error_body[:200]
+            return state
         elif status_code == 429:
             cooldown = self._exponential_backoff(state.backoff_level)
             state.backoff_level += 1

@@ -432,6 +432,17 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
                 is_free_model=(route.provider == "chatgpt_free"),
             )
             try:
+                # Combo-level demote: skip a provider this combo recently saw
+                # fail with a real cooldown (429/quota/5xx/auth) — failures are
+                # recorded under the synthetic "combo:<name>" key below, so an
+                # exhausted provider drops to the back automatically and the next
+                # healthy one is tried first ("hết quota thì đá xuống cuối").
+                # 413 is NOT cooled, so a one-off big payload never demotes it.
+                if not model_cooldown.is_available("combo:" + model, route.model):
+                    logger.info({"event": "combo_skip_cooling", "combo": model, "provider": route.provider, "model": route.model})
+                    last_error = f"{route.model} đang cooldown (combo-level)"
+                    continue
+
                 cooldown = model_cooldown.get_cooldown_info(route.model)
                 if cooldown:
                     logger.warning({"event": "model_cooldown_skip", "model": route.model, **cooldown})

@@ -141,6 +141,7 @@ def handle_free_chat(
 
     excluded_tokens: set[str] = set()
     last_quota_error: Exception | None = None
+    payload_413_count = 0
     for attempt in range(8):
         token = account_service.get_text_access_token(
             excluded_tokens=excluded_tokens, account_type="free", requires_image=requires_image
@@ -195,13 +196,22 @@ def handle_free_chat(
                 excluded_tokens.add(token)
                 continue
             if is_payload_too_large:
-                try:
-                    account_service.demote_account(token)
-                except Exception:
-                    pass
-                logger.info({"event": "free_account_rotate", "reason": "payload_too_large", "attempt": attempt})
+                # 413 = payload exceeds ChatGPT Free's ~45KB backend limit. This
+                # is REQUEST-SIZE, not account-specific — every free account has
+                # the SAME backend limit, so they reject the same oversized
+                # payload identically (confirmed in prod: all 8 rotated and
+                # 413'd, ~30s wasted). We still give a 2nd account a chance as
+                # insurance, then stop rotating and let the combo fall to a
+                # provider that accepts larger payloads. The account is healthy
+                # (size problem, not the account), so we do NOT demote it. The
+                # real fix is shrinking the payload so it never 413s here.
+                payload_413_count += 1
+                logger.info({"event": "free_payload_too_large", "attempt": attempt, "count": payload_413_count})
                 excluded_tokens.add(token)
                 last_quota_error = exc
+                if payload_413_count >= 2:
+                    logger.info({"event": "free_payload_too_large_giveup", "tried": payload_413_count})
+                    raise
                 continue
             if not is_quota:
                 raise
