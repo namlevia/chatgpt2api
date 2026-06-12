@@ -73,6 +73,7 @@ export type SettingsConfig = {
   log_levels?: string[];
   backup?: BackupSettings;
   backup_state?: BackupState;
+  codex_auto_list?: string;
   [key: string]: unknown;
 };
 

@@ -15,6 +15,7 @@ import { NvidiaNimCard } from "./components/nvidia-nim-card";
 import { CustomProvidersCard } from "./components/custom-providers-card";
 import { FlowCard } from "./components/flow-card";
 import { ChatGPTOnboardCard } from "./components/chatgpt-onboard-card";
+import { CodexOnboardCard } from "./components/codex-onboard-card";
 import { ChatGPTWebCard } from "./components/chatgpt-web-card";
 import { GeminiWebCard } from "./components/gemini-web-card";
 import { GeminiWebApiCard } from "./components/gemini-web-api-card";
@@ -113,6 +114,14 @@ function SettingsPageContent() {
           icon={<KeyRound className="size-5" />}
         >
           <ChatGPTOnboardCard />
+        </SettingsSection>
+
+        <SettingsSection
+          title="Codex Auto-Login (Đăng nhập Hàng loạt)"
+          description="Danh sách tài khoản Codex (Github) để tự động đăng nhập hàng loạt lấy JWT"
+          icon={<Plug className="size-5" />}
+        >
+          <CodexOnboardCard />
         </SettingsSection>
 
         <SettingsSection

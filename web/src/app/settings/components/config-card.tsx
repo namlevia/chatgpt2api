@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import { LoaderCircle, PlugZap, Save } from "lucide-react";
 import { useState } from "react";

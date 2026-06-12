@@ -40,6 +40,7 @@ type ImportMethod =
   | "cpa"
   | "oauth"
   | "oauth_flow"
+  | "codex_auto_login"
   | "antigravity_flow"
   | "multi_tap"
   | "multi_auth";
@@ -132,6 +133,11 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
   const [multiStage, setMultiStage] = useState<string>("");
   const [multiNeedCode, setMultiNeedCode] = useState(false);
   const [multiResults, setMultiResults] = useState<Record<string, any>>({});
+  const [codexDraft, setCodexDraft] = useState({
+    githubEmail: "",
+    gmailEmail: typeof window !== "undefined" ? localStorage.getItem("codex_gmail") || "" : "",
+    gmailAppPassword: typeof window !== "undefined" ? localStorage.getItem("codex_gmail_pass") || "" : ""
+  });
   const [csCfg, setCsCfg] = useState<{ url: string; apiKey: string }>({
     url: "http://172.16.10.38:8010",
     apiKey: "",
@@ -172,6 +178,11 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
             url: flow.captcha_solver_url || "http://172.16.10.38:8010",
             apiKey: flow.captcha_solver_api_key || "",
           });
+        }
+        
+        const config = (data.data as any)?.config || {};
+        if (config.codex_auto_list) {
+          setCodexDraft(prev => ({ ...prev, githubEmail: config.codex_auto_list }));
         }
       } catch {/* keep defaults */}
     })();
@@ -931,6 +942,134 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
       );
     }
 
+    if (method === "codex_auto_login") {
+      return (
+        <div className="space-y-4">
+          <button type="button" onClick={() => setMethod("menu")}
+            className="inline-flex items-center gap-1 text-sm text-stone-500 transition hover:text-stone-800">
+            <ArrowLeft className="size-4" /> Quay lại
+          </button>
+
+          <div className="rounded-2xl border border-stone-200 bg-stone-100 p-4">
+            <div className="mb-2 text-sm font-medium">Tự động đăng nhập Github (Codex) Hàng Loạt</div>
+            <p className="text-sm text-stone-600 mb-3">Nhập danh sách tài khoản GitHub (mỗi dòng một tài khoản theo định dạng <code>email|password|imap_email|imap_pass</code>). Nếu không điền phần IMAP, hệ thống sẽ dùng IMAP tổng bên dưới.</p>
+            <div className="space-y-3">
+              <Textarea 
+                placeholder="Ví dụ:&#10;acc1@outlook.com|pass123&#10;acc2@hotmail.com|pass456|receiver@gmail.com|apppass" 
+                value={codexDraft.githubEmail} 
+                onChange={e => setCodexDraft({...codexDraft, githubEmail: e.target.value})} 
+                className="min-h-32 resize-none rounded-xl border-stone-300 font-mono text-xs mb-3"
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <Input 
+                  placeholder="Gmail IMAP (tổng)" 
+                  value={codexDraft.gmailEmail} 
+                  onChange={e => {
+                    setCodexDraft({...codexDraft, gmailEmail: e.target.value});
+                    localStorage.setItem("codex_gmail", e.target.value);
+                  }} 
+                />
+                <Input 
+                  type="password" 
+                  placeholder="Mật khẩu ứng dụng Gmail" 
+                  value={codexDraft.gmailAppPassword} 
+                  onChange={e => {
+                    setCodexDraft({...codexDraft, gmailAppPassword: e.target.value});
+                    localStorage.setItem("codex_gmail_pass", e.target.value);
+                  }} 
+                />
+              </div>
+              
+              <Button className="w-full bg-stone-900 text-white hover:bg-stone-800"
+                disabled={!codexDraft.githubEmail.trim() || isSubmitting}
+                onClick={async () => {
+                  const lines = codexDraft.githubEmail.split('\n').map(l => l.trim()).filter(Boolean);
+                  if (lines.length === 0) {
+                    toast.error("Vui lòng nhập ít nhất 1 tài khoản GitHub");
+                    return;
+                  }
+                  
+                  setIsSubmitting(true);
+                  let successCount = 0;
+                  let failCount = 0;
+                  
+                  try {
+                    const { request: req } = await import("@/lib/request");
+                    
+                    for (let i = 0; i < lines.length; i++) {
+                      const line = lines[i];
+                      const parts = line.includes('|') ? line.split('|') : line.split(':');
+                      const email = parts[0];
+                      const pass = parts[1];
+                      let imapEmail = parts[2];
+                      let imapPass = parts[3];
+
+                      if (!email || !pass) {
+                        toast.error(`Định dạng lỗi dòng ${i + 1}: ${line}`);
+                        failCount++;
+                        continue;
+                      }
+
+                      if (!imapEmail) imapEmail = codexDraft.gmailEmail;
+                      if (!imapPass) imapPass = codexDraft.gmailAppPassword;
+
+                      if (!imapEmail || !imapPass) {
+                        toast.error(`Thiếu cấu hình IMAP cho dòng ${i + 1}: ${email}`);
+                        failCount++;
+                        continue;
+                      }
+
+                      toast.info(`[${i + 1}/${lines.length}] Đang xử lý: ${email}...`);
+                      
+                      try {
+                        const data = await req.get("/api/oauth/codex/start");
+                        const auth_url = (data.data as any)?.auth_url;
+                        if (!auth_url) throw new Error("Lỗi API tạo Auth URL");
+
+                        const res = await fetch(`${csCfg.url}/v1/codex-onboard`, {
+                          method: "POST",
+                          headers: { "Authorization": `Bearer ${csCfg.apiKey}`, "Content-Type": "application/json" },
+                          body: JSON.stringify({
+                            auth_url,
+                            github_email: email.trim(),
+                            github_password: pass.trim(),
+                            gmail_email: imapEmail.trim(),
+                            gmail_app_password: imapPass.trim()
+                          }),
+                        });
+                        const rData = await res.json();
+                        if (rData.state !== "success" || !rData.redirect_url) {
+                          throw new Error(rData.error || "Playwright thất bại");
+                        }
+
+                        await req.post("/api/oauth/codex/exchange", { redirect_url: rData.redirect_url });
+                        toast.success(`Xong ${email}!`);
+                        successCount++;
+                      } catch (err) {
+                        toast.error(`Lỗi ${email}: ${err instanceof Error ? err.message : String(err)}`);
+                        failCount++;
+                      }
+                    }
+                    
+                    toast.success(`Hoàn tất! Thành công: ${successCount}, Thất bại: ${failCount}`);
+                    if (successCount > 0) {
+                      setOpen(false);
+                      resetState();
+                      onImported([]);
+                    }
+                  } catch (error) {
+                    toast.error(error instanceof Error ? error.message : "Xác thực thất bại");
+                  } finally { setIsSubmitting(false); }
+                }}>
+                {isSubmitting ? <LoaderCircle className="mr-2 size-4 animate-spin" /> : null}
+                Bắt đầu chạy Auto-Login Hàng Loạt
+              </Button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     if (method === "antigravity_flow") {
       return (
         <div className="space-y-4">
@@ -1029,6 +1168,12 @@ export function AccountImportDialog({ disabled, onImported }: AccountImportDialo
           description="Đăng nhập bằng tài khoản OpenAI để lấy token OAuth (hỗ trợ Docker/Server)."
           icon={KeyRound}
           onClick={() => setMethod("oauth_flow")}
+        />
+        <MethodCard
+          title="Auto-Login Codex (Playwright)"
+          description="Đăng nhập tự động GitHub bằng Playwright. Hỗ trợ lấy mã xác minh qua Gmail IMAP (Forward)."
+          icon={KeyRound}
+          onClick={() => setMethod("codex_auto_login")}
         />
         <MethodCard
           title="Đăng nhập Antigravity (Google)"
