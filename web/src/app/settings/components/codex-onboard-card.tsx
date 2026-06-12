@@ -8,6 +8,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { updateSettingsConfig } from "@/lib/api";
+import { httpRequest } from "@/lib/request";
 import { useSettingsStore } from "../store";
 
 export function CodexOnboardCard() {
@@ -87,8 +88,8 @@ export function CodexOnboardCard() {
         toast.info(`[${i + 1}/${lines.length}] Đang xử lý: ${email}...`);
         
         try {
-          const data = await request.get("/api/oauth/codex/start");
-          const auth_url = (data.data as any)?.auth_url;
+          const data = await httpRequest<any>("/api/oauth/codex/start");
+          const auth_url = data?.auth_url;
           if (!auth_url) throw new Error("Lỗi API tạo Auth URL");
 
           const res = await fetch(`${csUrl}/v1/codex-onboard`, {
@@ -107,7 +108,7 @@ export function CodexOnboardCard() {
             throw new Error(rData.error || "Playwright thất bại");
           }
 
-          await request.post("/api/oauth/codex/exchange", { redirect_url: rData.redirect_url });
+          await httpRequest("/api/oauth/codex/exchange", { method: "POST", body: { redirect_url: rData.redirect_url } });
           toast.success(`Thành công tài khoản: ${email}!`);
           successCount++;
         } catch (err) {
