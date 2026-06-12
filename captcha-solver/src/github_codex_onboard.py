@@ -217,14 +217,14 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
         # Wait for redirect to localhost with code and state
         deadline = time.time() + 15
         while time.time() < deadline:
-            if 'code=' in page.url and 'state=' in page.url:
+            if 'code=' in page.url and 'localhost' in page.url:
                 break
             await asyncio.sleep(0.5)
 
         final_url = page.url
         if 'code=' not in final_url:
             return {'state': 'failed', 'error': f'Timeout waiting for OAuth redirect. Stuck at: {final_url}'}
-            
+
         logger.info(f"Codex onboard success, final_url: {final_url}")
         return {'state': 'success', 'redirect_url': final_url}
 
