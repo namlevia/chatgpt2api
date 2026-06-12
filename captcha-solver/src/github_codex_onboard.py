@@ -19,7 +19,7 @@ class CodexOnboardReq(BaseModel):
     gmail_email: str
     gmail_app_password: str
 
-async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_timestamp: float, max_wait=120) -> Optional[str]:
+async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_timestamp: float, target_email: str, max_wait=120) -> Optional[str]:
     deadline = time.time() + max_wait
     while time.time() < deadline:
         try:
@@ -62,6 +62,11 @@ async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_time
                                 break
                     else:
                         content = msg.get_payload(decode=True).decode()
+                    
+                    # Verify that the email is intended for the target_email
+                    # Forwarded emails usually keep the target_email in the To header or body
+                    if target_email.lower() not in str(msg).lower():
+                        continue
                     
                     match = re.search(r'\b\d{6}\b', content)
                     if match:
@@ -124,7 +129,7 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
                     content = await page.content()
                     if 'Kiểm tra hộp thư' in content or 'Check your email' in content or 'Check your inbox' in content or await page.locator('input[inputmode="numeric"], input[type="text"]').count() > 0:
                         logger.info('Waiting for OpenAI 6-digit code from Gmail...')
-                        code = await _fetch_imap_code(req.gmail_email, req.gmail_app_password, request_time)
+                        code = await _fetch_imap_code(req.gmail_email, req.gmail_app_password, request_time, req.github_email)
                         if not code:
                             return {'state': 'failed', 'error': 'Could not fetch OpenAI code from Gmail IMAP'}
                         
@@ -156,7 +161,7 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
             if 'Device Verification' in content or 'device verification' in title.lower() or await page.locator('#otp').count() > 0:
                 logger.info('GitHub requires device verification code')
                 request_time = time.time() - 30 # For github, email is triggered on previous step
-                code = await _fetch_imap_code(req.gmail_email, req.gmail_app_password, request_time)
+                code = await _fetch_imap_code(req.gmail_email, req.gmail_app_password, request_time, req.github_email)
                 if not code:
                     return {'state': 'failed', 'error': 'Could not fetch verification code from Gmail IMAP'}
                 
