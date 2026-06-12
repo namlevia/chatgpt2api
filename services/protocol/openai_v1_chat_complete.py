@@ -458,9 +458,13 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
                 # instead of burning a ~30s rotating-and-413 attempt.
                 if route.provider == "chatgpt_free":
                     try:
+                        # Measure the SLIMMED payload (enums stripped) — the same
+                        # transform _dispatch applies — so we only skip the free
+                        # tier when it genuinely can't fit, not before slimming.
+                        slim_tools = _slim_tools_for_free(tools_with_mcp)
                         payload_bytes = (
                             len(json.dumps(messages_for_route, ensure_ascii=False, default=str).encode("utf-8"))
-                            + len(json.dumps(tools_with_mcp or [], ensure_ascii=False, default=str).encode("utf-8"))
+                            + len(json.dumps(slim_tools or [], ensure_ascii=False, default=str).encode("utf-8"))
                         )
                     except Exception:
                         payload_bytes = 0
@@ -967,6 +971,45 @@ def _execute_mcp_tools_in_response(
     return current_result
 
 
+def _slim_tools_for_free(tools: list[dict[str, Any]] | None) -> list[dict[str, Any]] | None:
+    """Shrink tool schemas for the ChatGPT Free path (~45KB hard limit).
+
+    Home Assistant's Assist tools embed the full exposed-entity list as `enum`
+    arrays on their parameters (e.g. 117 entities × dozens of intent tools = tens
+    of KB), which is the dominant payload bloat that 413s the free backend. We
+    drop the enums/examples and clamp over-long descriptions. The tools still
+    work — the model passes the entity name as a free string, and the targeted HA
+    context already lists the valid names. Returns the tools unchanged when
+    there's nothing to trim.
+    """
+    if not tools:
+        return tools
+    import copy
+    slimmed: list[dict[str, Any]] = []
+    for t in tools:
+        if not isinstance(t, dict):
+            slimmed.append(t)
+            continue
+        t = copy.deepcopy(t)
+        params = (t.get("function") or {}).get("parameters") or {}
+        props = params.get("properties")
+        if isinstance(props, dict):
+            for p in props.values():
+                if not isinstance(p, dict):
+                    continue
+                p.pop("enum", None)
+                p.pop("examples", None)
+                items = p.get("items")
+                if isinstance(items, dict):
+                    items.pop("enum", None)
+                    items.pop("examples", None)
+                desc = p.get("description")
+                if isinstance(desc, str) and len(desc) > 200:
+                    p["description"] = desc[:200]
+        slimmed.append(t)
+    return slimmed
+
+
 def _dispatch(route, messages, tools, tool_choice, body):
     """Dispatch to the correct provider handler."""
     # RTK compression thresholds — 24KB → 80KB → 100KB. We sit at the
@@ -1011,6 +1054,9 @@ def _dispatch(route, messages, tools, tool_choice, body):
         # rotation). Codex/paid traffic uses cx/ | codex/ | paid/; OpenAI-API
         # (sk-/standard) uses oai/.
         from services.providers.chatgpt_free import handle_free_chat
+        # Strip entity-enum bloat from HA's tool schemas so the payload fits the
+        # free backend's ~45KB limit (see _slim_tools_for_free).
+        tools = _slim_tools_for_free(tools)
         return handle_free_chat(route.model, messages, tools, tool_choice, body.get("stream"), body, route)
     elif route.provider == "openai_api":
         # 3rd path kept separate (đại ca's decision): raw OpenAI API key (sk-)
@@ -1030,6 +1076,7 @@ def _dispatch(route, messages, tools, tool_choice, body):
     else:
         logger.warning({"event": "unknown_provider", "provider": route.provider, "fallback": "chatgpt_free"})
         from services.providers.chatgpt_free import handle_free_chat
+        tools = _slim_tools_for_free(tools)
         return handle_free_chat(route.model, messages, tools, tool_choice, body.get("stream"), body, route)
 
 
