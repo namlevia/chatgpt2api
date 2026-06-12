@@ -207,9 +207,10 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
                 await asyncio.sleep(2.0)
                 
         # OpenAI Codex Consent (Tiếp tục)
-        if 'Codex' in content and await page.locator('button:has-text("Tiếp tục"), button:has-text("Continue")').count() > 0:
-            logger.info("Clicking Continue on Codex Consent screen...")
-            await page.click('button:has-text("Tiếp tục"), button:has-text("Continue")')
+        consent_btn = page.locator('button[value="accept"], button:has-text("Authorize"), button:has-text("Allow"), button:has-text("Chấp nhận"), button:has-text("Đồng ý"), button:has-text("Tiếp tục"), button:has-text("Continue")').first
+        if 'Codex' in content and await consent_btn.count() > 0:
+            logger.info("Clicking Continue/Authorize on Codex Consent screen...")
+            await consent_btn.click()
             await page.wait_for_load_state('domcontentloaded')
             await asyncio.sleep(2.0)
 
@@ -221,6 +222,9 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
             await asyncio.sleep(0.5)
 
         final_url = page.url
+        if 'code=' not in final_url:
+            return {'state': 'failed', 'error': f'Timeout waiting for OAuth redirect. Stuck at: {final_url}'}
+            
         logger.info(f"Codex onboard success, final_url: {final_url}")
         return {'state': 'success', 'redirect_url': final_url}
 
