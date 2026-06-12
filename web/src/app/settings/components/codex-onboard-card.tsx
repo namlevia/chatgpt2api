@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
-import { request } from "@/lib/request";
+import { updateSettingsConfig } from "@/lib/api";
 import { useSettingsStore } from "../store";
 
 export function CodexOnboardCard() {
@@ -36,7 +36,9 @@ export function CodexOnboardCard() {
   async function saveSettings() {
     setSaveLoading(true);
     try {
-      await request.post("/api/settings", { config });
+      if (config) {
+        await updateSettingsConfig(config);
+      }
       toast.success("Đã lưu danh sách Codex thành công");
     } catch (e: any) {
       toast.error(`Lỗi lưu cấu hình: ${e.message}`);
@@ -159,7 +161,7 @@ export function CodexOnboardCard() {
             <div>
               <label className="text-[10px] text-blue-800">App Password Gmail</label>
               <Input 
-                type="password" 
+                type="text" 
                 placeholder="abcd efgh ijkl mnop" 
                 value={gmailAppPassword} 
                 onChange={e => {
