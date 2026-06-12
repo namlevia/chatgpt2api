@@ -834,12 +834,23 @@ class AccountService:
                     continue
                 refresh_token = str(cred.get("refresh_token") or "").strip() or None
                 expires_at = cred.get("expires_at") or None
+                email = str(cred.get("email") or "").strip().lower()
+
+                # Find existing account by token OR by email (to avoid duplicating OAuth logins)
                 current = self._accounts.get(access_token)
+                if current is None and email:
+                    for t, acc in list(self._accounts.items()):
+                        # Match email and ensure it's a codex account (so we don't overwrite non-codex accounts)
+                        if str(acc.get("email") or "").strip().lower() == email and account_type in set(str(acc.get("type") or "").split(",")):
+                            current = self._accounts.pop(t)
+                            break
+
                 if current is None:
                     added += 1
                     base = {"access_token": access_token, "type": account_type, "status": "active"}
                 else:
                     base = dict(current)
+                    base["access_token"] = access_token
                     existing_types = set(str(base.get("type") or "").split(","))
                     new_types = set(str(account_type).split(","))
                     base["type"] = ",".join(sorted(existing_types | new_types))
