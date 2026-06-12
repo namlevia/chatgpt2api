@@ -470,8 +470,11 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
                         # transform _dispatch applies — so we only skip the free
                         # tier when it genuinely can't fit, not before slimming.
                         slim_tools = _slim_tools_for_free(tools_with_mcp)
+                        raw_json = json.dumps(messages_for_route, ensure_ascii=False, default=str)
+                        import re
+                        slim_json = re.sub(r'"data:image/[^;]+;base64,[^"]+"', '""', raw_json)
                         payload_bytes = (
-                            len(json.dumps(messages_for_route, ensure_ascii=False, default=str).encode("utf-8"))
+                            len(slim_json.encode("utf-8"))
                             + len(json.dumps(slim_tools or [], ensure_ascii=False, default=str).encode("utf-8"))
                         )
                     except Exception:
