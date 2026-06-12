@@ -239,7 +239,12 @@ def create_router() -> APIRouter:
     @router.get("/api/accounts")
     async def get_accounts(authorization: str | None = Header(default=None)):
         require_admin(authorization)
-        return {"items": account_service.list_accounts()}
+        excluded_types = {"claude", "gemini_web", "gemini_web_api", "chatgpt_web"}
+        items = [
+            a for a in account_service.list_accounts()
+            if a.get("type") not in excluded_types
+        ]
+        return {"items": items}
 
     @router.get("/api/v1/provider-tree")
     async def get_provider_tree(authorization: str | None = Header(default=None)):
