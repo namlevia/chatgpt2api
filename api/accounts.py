@@ -13,7 +13,7 @@ from api.support import (
     sanitize_sub2api_server,
     sanitize_sub2api_servers,
 )
-from services.account_service import account_service, account_group
+from services.account_service import account_service, account_group, WEB_SESSION_GROUPS
 from services.config import config
 from services.cpa_service import cpa_config, cpa_import_service, list_remote_files
 from services.sub2api_service import (
@@ -256,7 +256,15 @@ def create_router() -> APIRouter:
         tree: list[dict] = []
 
         # ── ChatGPT branch ──
-        chatgpt_accounts = [a for a in accounts if str(a.get("type") or "").lower() not in ("", "custom")]
+        # Exclude web-session pools (gemini_web_api / gemini_web / chatgpt_web /
+        # claude): their pool entries carry a non-"" type so the raw type check
+        # would leak them into the ChatGPT branch, but each is its OWN provider
+        # branch below. Filter by canonical group, not the raw type string.
+        chatgpt_accounts = [
+            a for a in accounts
+            if str(a.get("type") or "").lower() not in ("", "custom")
+            and account_group(a) not in WEB_SESSION_GROUPS
+        ]
         if chatgpt_accounts:
             # Group by canonical pool (account_group): free / codex / openai /
             # antigravity. Paid plans (plus/go/business…) land in `codex` — `go`

@@ -449,6 +449,26 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
                     last_error = cooldown["message"]
                     continue
 
+                # ChatGPT Free has a hard ~45KB backend limit (413 Payload Too
+                # Large). A HA control request carries the Assist system prompt
+                # plus its tool schemas (entity names embedded as enums) — often
+                # >45KB. No free account can serve that (they all 413 identically),
+                # so detecting the oversize up front lets us skip the free tier and
+                # go straight to a provider that accepts large payloads (cx/gemini)
+                # instead of burning a ~30s rotating-and-413 attempt.
+                if route.provider == "chatgpt_free":
+                    try:
+                        payload_bytes = (
+                            len(json.dumps(messages_for_route, ensure_ascii=False, default=str).encode("utf-8"))
+                            + len(json.dumps(tools_with_mcp or [], ensure_ascii=False, default=str).encode("utf-8"))
+                        )
+                    except Exception:
+                        payload_bytes = 0
+                    if payload_bytes > 42_000:
+                        logger.info({"event": "combo_skip_free_oversized", "bytes": payload_bytes, "model": route.model})
+                        last_error = "payload exceeds ChatGPT Free 45KB limit"
+                        continue
+
                 logger.info({"event": "combo_try", "combo": model, "provider": route.provider, "model": route.model})
                 
                 result = _dispatch(route, messages_for_route, tools_with_mcp, tool_choice, body)
