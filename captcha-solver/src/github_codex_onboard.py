@@ -70,9 +70,10 @@ async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_time
                     if target_email.lower() not in str(msg).lower():
                         continue
                     
-                    match = re.search(r'\b\d{6}\b', content)
+                    match = re.search(r'(?<!#)\b\d{6}\b', content)
                     if match:
                         code_match = match.group(0)
+                        logger.info(f"FOUND CODE {code_match} for {target_email}! msg TO: {msg.get('To')}, msg FROM: {msg.get('From')}")
                         # Mark this specific email as read so it's not processed again
                         mail.store(msg_id, '+FLAGS', '\\Seen')
                         break
