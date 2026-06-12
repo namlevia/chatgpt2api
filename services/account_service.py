@@ -695,8 +695,25 @@ class AccountService:
             self._save_accounts()
 
     def list_accounts(self) -> list[dict]:
+        from datetime import datetime
+        now = datetime.now()
+
+        def _scrub(item: dict) -> dict:
+            out = dict(item)
+            for fld in ("last_image_failed_at", "last_analysis_failed_at", "last_quota_exhausted_at"):
+                ts = out.get(fld)
+                if ts:
+                    try:
+                        if (now - datetime.strptime(ts, "%Y-%m-%d %H:%M:%S")).total_seconds() >= 6 * 3600:
+                            out[fld] = ""
+                            if fld == "last_quota_exhausted_at":
+                                out["last_quota_exhausted"] = ""
+                    except Exception:
+                        pass
+            return out
+
         with self._lock:
-            return [dict(item) for item in self._accounts.values()]
+            return [_scrub(item) for item in self._accounts.values()]
 
     def find_by_refresh_token(self, refresh_token: str) -> dict | None:
         """Return the account dict matching a given refresh_token, or None.
