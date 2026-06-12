@@ -36,8 +36,10 @@ async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_time
                 # Check from newest to oldest
                 msg_ids = messages[0].split()[::-1]
                 code_match = None
-                for msg_id in msg_ids[:5]:  # Check top 5 unread
-                    status, data = mail.fetch(msg_id, '(RFC822)')
+                for msg_id in msg_ids[:10]:  # Check top 10 unread
+                    status, data = mail.fetch(msg_id, '(BODY.PEEK[])')
+                    if not data or not data[0] or not isinstance(data[0], tuple):
+                        continue
                     msg = email.message_from_bytes(data[0][1])
                     
                     # Verify the email is actually new
@@ -71,6 +73,8 @@ async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_time
                     match = re.search(r'\b\d{6}\b', content)
                     if match:
                         code_match = match.group(0)
+                        # Mark this specific email as read so it's not processed again
+                        mail.store(msg_id, '+FLAGS', '\\Seen')
                         break
                 
                 mail.logout()
