@@ -80,7 +80,7 @@ async def _fetch_imap_code(gmail_email: str, gmail_app_password: str, since_time
     return None
 
 async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
-    profile = f'github-{req.github_email.split("@")[0]}'
+    profile = f'codex-{req.github_email.split("@")[0]}'
     ctx = await pool.get(profile=profile, headless=False, force_recreate=True)
     pages = ctx.pages
     page = pages[0] if pages else await ctx.new_page()

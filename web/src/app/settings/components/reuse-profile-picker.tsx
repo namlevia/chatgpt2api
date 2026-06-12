@@ -26,7 +26,7 @@ function isAccountProfile(n: string): boolean {
   if (/^pn-/i.test(n)) return false;
   if (/(^|-)probe\d*$/i.test(n)) return false; // chatgpt-probe, -probe2
   if (/^test[-_]|[-_]test$|^nonexistent/i.test(n)) return false; // test-*, *-test
-  if (/^github-/i.test(n)) return false; // codex accounts
+  if (/^github-/i.test(n) || /^codex-/i.test(n)) return false; // codex accounts
   return true;
 }
 
