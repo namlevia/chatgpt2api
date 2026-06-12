@@ -140,7 +140,7 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
                         
                         logger.info(f'Fetched OpenAI code: {code}')
                         # Fill the code
-                        await page.fill('input[inputmode="numeric"], input[type="text"]', code)
+                        await page.locator('input[inputmode="numeric"], input[type="text"]').first.press_sequentially(code, delay=100)
                         await page.click('button[type="submit"], button:has-text("Tiếp tục"), button:has-text("Continue")')
                         await asyncio.sleep(5.0)
                 else:
@@ -170,7 +170,7 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
                 if not code:
                     return {'state': 'failed', 'error': 'Could not fetch verification code from Gmail IMAP'}
                 
-                await page.fill('#otp', code)
+                await page.locator('#otp').first.press_sequentially(code, delay=100)
                 await asyncio.sleep(1.0)
                 if await page.locator('button:has-text("Verify")').count() > 0:
                     await page.click('button:has-text("Verify")')
