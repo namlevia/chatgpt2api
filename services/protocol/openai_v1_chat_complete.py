@@ -329,7 +329,15 @@ def _run_pipeline_combo(
                 status_code=_extract_status(last_error), error_body=last_error, provider="",
             )
             continue
-    return completion_response(model=combo_name, content=f"All pipeline editors failed. Last error: {last_error[:200]}", messages=messages)
+    err_msg = f"All pipeline editors failed. Last error: {last_error[:200]}"
+    if body.get("stream"):
+        def _err_stream():
+            cid = f"chatcmpl-{uuid.uuid4().hex}"
+            ts = int(time.time())
+            yield completion_chunk(combo_name, {"role": "assistant", "content": err_msg}, None, cid, ts)
+            yield completion_chunk(combo_name, {}, "stop", cid, ts)
+        return _err_stream()
+    return completion_response(model=combo_name, content=err_msg, messages=messages)
 
 
 def handle(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, Any]]:
@@ -492,7 +500,15 @@ def _handle_main(body: dict[str, Any]) -> dict[str, Any] | Iterator[dict[str, An
                     status_code=_extract_status(last_error), error_body=last_error, provider=route.provider,
                 )
                 continue
-        return completion_response(model=model, content=f"All providers failed. Last error: {last_error[:200]}", messages=messages)
+        err_msg = f"All providers failed. Last error: {last_error[:200]}"
+        if body.get("stream"):
+            def _err_stream():
+                cid = f"chatcmpl-{uuid.uuid4().hex}"
+                ts = int(time.time())
+                yield completion_chunk(model, {"role": "assistant", "content": err_msg}, None, cid, ts)
+                yield completion_chunk(model, {}, "stop", cid, ts)
+            return _err_stream()
+        return completion_response(model=model, content=err_msg, messages=messages)
 
     # Single model — route directly
     route = backend_router.route(model, messages)
