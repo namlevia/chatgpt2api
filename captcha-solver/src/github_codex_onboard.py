@@ -95,6 +95,16 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
     pages = ctx.pages
     page = pages[0] if pages else await ctx.new_page()
 
+    # Listen at request level - captures URL BEFORE browser tries to connect
+    # This works even when localhost returns ERR_CONNECTION_REFUSED
+    captured_callback_url: list[str] = []
+    def on_request(request):
+        url = request.url
+        if 'localhost' in url and 'code=' in url:
+            logger.info(f'Request intercepted callback URL: {url}')
+            captured_callback_url.append(url)
+    page.on('request', on_request)
+
     try:
         await page.goto(req.auth_url, wait_until='domcontentloaded', timeout=60000)
         
@@ -214,17 +224,18 @@ async def run_codex_onboard(req: CodexOnboardReq) -> dict[str, Any]:
             await page.wait_for_load_state('domcontentloaded')
             await asyncio.sleep(2.0)
 
-        # Wait for redirect to localhost with code and state
+        # Wait for the localhost callback URL captured via request event
+        # page.url won't work because ERR_CONNECTION_REFUSED prevents page from loading
         deadline = time.time() + 15
         while time.time() < deadline:
-            if 'code=' in page.url and 'localhost' in page.url:
+            if captured_callback_url:
                 break
             await asyncio.sleep(0.5)
 
-        final_url = page.url
-        if 'code=' not in final_url:
-            return {'state': 'failed', 'error': f'Timeout waiting for OAuth redirect. Stuck at: {final_url}'}
+        if not captured_callback_url:
+            return {'state': 'failed', 'error': f'Timeout waiting for OAuth redirect. Stuck at: {page.url}'}
 
+        final_url = captured_callback_url[0]
         logger.info(f"Codex onboard success, final_url: {final_url}")
         return {'state': 'success', 'redirect_url': final_url}
 
